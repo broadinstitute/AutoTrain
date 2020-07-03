@@ -3,4 +3,5 @@
 data/
 .ipynb_checkpoints/
 __pycache__/
-weightsh/
+weightsH/
+logs/
