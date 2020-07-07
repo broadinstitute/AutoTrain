@@ -1,7 +1,15 @@
 *.pkl
 *.pth
+*.csv
+
+
 data/
+logs/
+weightsH/
+
+
 .ipynb_checkpoints/
 __pycache__/
-weightsH/
-logs/
+
+.DS_Store
+*.egg-info/
