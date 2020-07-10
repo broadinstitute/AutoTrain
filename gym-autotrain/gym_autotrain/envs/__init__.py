@@ -1,1 +1,2 @@
 from gym_autotrain.envs.autotrain_env import AutoTrainEnvironment
+from gym_autotrain.envs.replay_buffer import ReplayBuffer
