@@ -44,7 +44,7 @@ class AutoTrainEnvironment(gym.Env):
             self.action_space_dim = self.H*3 + 2 
             
             # model 
-            self.statell = StateLinkedList(savedir=savedir)
+            self.ll = StateLinkedList(savedir=savedir)
             self.backbone = backbone
 
 
@@ -58,9 +58,11 @@ class AutoTrainEnvironment(gym.Env):
 
             self.trndl, self.fixdl, self.valdl =  utils.create_dls(self.trnds, self.valds, bs=bs, num_workers=num_workers)
 
-            # Thresholdout
+            # Thresholdout & statistic of interest
             self.thresholdout = Thresholdout(self.trnds,self.valds)
             self.phi = phi 
+            self._phi_func = partial(self.phi, model=self.backbone) #  does partial work on this
+            self._cur_phi_val = self._phi_val # self._phi_val is the API that should be used when accessing phi
 
             # calculate the sampling interval
             self._sampling_interval = len(self.trndl) * self.T // self.K
@@ -69,7 +71,7 @@ class AutoTrainEnvironment(gym.Env):
 
             self._init_observation()
 
-            self.statell.append(self._curr_observation)
+            self.ll.append(self._curr_observation) # should  this be here ??
 
             self.time_step = 0
 
@@ -77,16 +79,23 @@ class AutoTrainEnvironment(gym.Env):
             utils.init_params(self.backbone)
             self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
 
-      def _run_phi(self) -> float:
-            func = partial(phi, model=self.backbone)
-            return self.thresholdout.verify(func)
+      @property
+      def _phi_val(self) -> float:
+
+            if not hasattr(self, '_last_phi_update') or self._last_phi_update != self.time_step:
+                  self._prev_phi_val = self._cur_phi_val
+                  self._cur_phi_val = self.thresholdout.verify(self._phi_func)
+                  self._last_phi_update = self.time_step
+
+            return self._cur_phi_val
+
 
       def _init_observation(self):
             self._curr_observation = ObservationState(
                   param_dict=self.backbone.state_dict(),
                   loss_vec=np.zeros(self.K),
                   lr=self.lr_init,
-                  phi_val=self._run_phi(),
+                  phi_val=self._phi_val,
             )
 
       def _set_observation(self, loss_vec: np.array,  phi_val: float):
@@ -105,7 +114,7 @@ class AutoTrainEnvironment(gym.Env):
             """
             pass 
 
-      def step(self, action): 
+      def step(self, action_vec): 
             """
             a step in an environment consitiutes of:
                    - check for stop; if stop  then calculate final reward else
@@ -116,45 +125,56 @@ class AutoTrainEnvironment(gym.Env):
             
             """
 
-            action_id = torch.argmax(action, dim=-1).item()
+            action = torch.argmax(action_vec, dim=-1).item()
 
-            if action_id == self.action_space_dim:
-                  # stop
-                  print('stop')
-                  return
+            is_stop = action == self.action_space_dim
+            is_reinit = action == self.action_space_dim - 1
 
-            if action_id == self.action_space_dim - 1:
-                  print('weights reinit')
-                  return
+            if is_stop:
+                  final_reward = self._compute_final_reward()
+                  return None, final_reward, True, {}
 
-            if action_id < 5:
+            if is_reinit:
+                  self._init_backbone()
+                  self.ll = StateLinkedList(savedir=self.savedir)
+
+            # lr and rewind steps
+            if action < 5:
                   self._scale_lr(0.9)
-                  rewind_steps = 0 # determine here
-
-
-            elif action_id >= 10:
+                  rewind_steps = action
+            elif action >= 5 and action < 10:
+                  rewind_step = action - 5
+            else:
                   self._scale_lr(1.1)
-                  # rewind 
-
+                  rewind_step = action - 10
             
-            # rewind 
-            self.statell.rewind(rewind_steps)
+            # rewind
+            if rewind_step != 0 and not is_reinit:
+                  self.ll.rewind(rewind_steps)
             
             # do training 
-
+            loss_vec = self._train_one_cycle()
             
             # set current observation
+            self._set_observation(loss_vec, self._phi_val) # whats this for then
 
             # get last H observations
+            o_history = self.ll.get_observations(self.H)
 
-            # compute  intermediate reward
+            # compute intermediate reward
+            step_reward = self._compute_intermediate_reward()
 
-            # do the thang
+            self.time_step += 1
+
+            return self._process_observation(o_history), step_reward, False, {}
 
 
       def _scale_lr(self, scale_factor):
+
             for g in self.opt.param_groups:
                   g['lr'] *= scale_factor
+
+            self._curr_lr *= scale_factor
 
 
       def _train_one_cycle(self):
@@ -165,13 +185,19 @@ class AutoTrainEnvironment(gym.Env):
             pass
 
       def _compute_final_reward(self):
-            pass
+            return self._phi_val
 
       def _compute_intermediate_reward(self):
-            pass
+            delta = self._phi_val - self._prev_phi_val
+            if  delta > 0:
+                  return self._inter_r_val
+            else:
+                  return -self._inter_r_val
 
-      def reset(self): 
-            pass
+
+      def reset(self):
+            self._init_backbone()
+            self._init_observation()
 
       def render(self, mode='human', close=False):
             pass
@@ -208,10 +234,12 @@ class StateLinkedList:
 
             self.len = 0 # the id of the next node
 
+      def get_observations(self, size):
+            #  zeros ?
+            pass
+
 
       def append(self, state: ObservationState):
-            """ expecting params to be state dict """
-
             self.len += 1
             new_node_path = self.node_path(self.len)
 
@@ -237,13 +265,13 @@ class StateLinkedList:
 
       def rewind(self, steps: int):
 
-            if steps > self.len:
-                  # remove all its on the caller to check
-                  return None
+            steps = min(steps, self.len)  # remove all its on the caller to check
 
             for i in range(steps):
                   nodepath = self.node_path(self.len - i)
                   nodepath.unlink()
+
+            self.len -= steps
 
 
 
