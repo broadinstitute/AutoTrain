@@ -18,16 +18,25 @@ import numpy as np
 from pathlib import Path
 from functools import partial
 
+import logging
+
+logger = logging.getLogger(__file__)
+
+
 class AutoTrainEnvironment(gym.Env):
       metadata = {'render.modes': ['human']}
 
       def __init__(self):
             pass
 
+      def __repr__(self):
+            return f"""AutoTrainEnvironment with the following parameters:
+                        lr_init={self.lr_init}, inter_reward={self._inter_reward}, H={self.H}, K={self.K}, T={self.T}"""
+
       def init(self, backbone: nn.Module,  phi: callable, savedir:Path,
              trainds:torchdata.Dataset, valds:torchdata.Dataset, 
-             T=3, H=5, K=256, lr_init=3e-4, 
-             num_workers=4, bs=16):
+             T=3, H=5, K=256, lr_init=3e-4, inter_reward=0.05,
+             num_workers=4, bs=16, log_file=None):
             """
             params:
                   - backbone: nn.Module, neural network architecture for training
@@ -40,6 +49,7 @@ class AutoTrainEnvironment(gym.Env):
             """
             # experiment paramter setup
             self.T, self.H, self.K = T, H, K
+            self._inter_reward = inter_reward
             # rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop 
             self.action_space_dim = self.H*3 + 2 
             
@@ -71,9 +81,11 @@ class AutoTrainEnvironment(gym.Env):
 
             self._init_observation()
 
-            self.ll.append(self._curr_observation) # should  this be here ??
+            self.ll.append(self._curr_observation) # TODO should this be here ??
 
             self.time_step = 0
+
+            logger.info(f"env initialised: {str(self)}")
 
       def _init_backbone(self):
             utils.init_params(self.backbone)
@@ -81,7 +93,7 @@ class AutoTrainEnvironment(gym.Env):
 
       @property
       def _phi_val(self) -> float:
-
+            # TODO check the logic here again
             if not hasattr(self, '_last_phi_update') or self._last_phi_update != self.time_step:
                   self._prev_phi_val = self._cur_phi_val
                   self._cur_phi_val = self.thresholdout.verify(self._phi_func)
@@ -190,14 +202,15 @@ class AutoTrainEnvironment(gym.Env):
       def _compute_intermediate_reward(self):
             delta = self._phi_val - self._prev_phi_val
             if  delta > 0:
-                  return self._inter_r_val
+                  return self._inter_reward
             else:
-                  return -self._inter_r_val
+                  return -self._inter_reward
 
 
       def reset(self):
             self._init_backbone()
             self._init_observation()
+            self.ll = StateLinkedList(savedir=self.savedir)
 
       def render(self, mode='human', close=False):
             pass
@@ -220,7 +233,12 @@ class ObservationState:
                   'lr': self.lr
             }
 
+      def __repr__(self):
+            return str(dict(self))
       
+      def numpy(self):
+            pass # TODO
+
 class StateLinkedList:
 
       def __init__(self, savedir: Path):
