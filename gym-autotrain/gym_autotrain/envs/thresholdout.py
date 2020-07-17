@@ -1,4 +1,4 @@
-import nupmy as np
+import numpy as np
 
 class Thresholdout:
     

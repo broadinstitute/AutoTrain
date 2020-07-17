@@ -23,6 +23,10 @@ import logging
 logger = logging.getLogger(__file__)
 
 
+def make_o():
+      # make observation
+
+
 class AutoTrainEnvironment(gym.Env):
       metadata = {'render.modes': ['human']}
 
@@ -34,7 +38,7 @@ class AutoTrainEnvironment(gym.Env):
                         lr_init={self.lr_init}, inter_reward={self._inter_reward}, H={self.H}, K={self.K}, T={self.T}"""
 
       def init(self, backbone: nn.Module,  phi: callable, savedir:Path,
-             trainds:torchdata.Dataset, valds:torchdata.Dataset, 
+             trnds:torchdata.Dataset, valds:torchdata.Dataset, 
              T=3, H=5, K=256, lr_init=3e-4, inter_reward=0.05,
              num_workers=4, bs=16, log_file=None):
             """
@@ -52,9 +56,10 @@ class AutoTrainEnvironment(gym.Env):
             self._inter_reward = inter_reward
             # rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop 
             self.action_space_dim = self.H*3 + 2 
-            
+            # loss_vec of size K + lr + phi_val
+            self.observation_space_dim = self.K + 2
             # model 
-            self.ll = StateLinkedList(savedir=savedir)
+            self.ll = StateLinkedList(savedir=savedir, dim=self.observation_space_dim)
             self.backbone = backbone
 
 
@@ -64,26 +69,26 @@ class AutoTrainEnvironment(gym.Env):
             self._init_backbone()
 
             # package data
-            self.trnds, self.valds = trainds, valds
+            self.trnds, self.valds = trnds, valds
 
             self.trndl, self.fixdl, self.valdl =  utils.create_dls(self.trnds, self.valds, bs=bs, num_workers=num_workers)
+
+            self.time_step = 0
 
             # Thresholdout & statistic of interest
             self.thresholdout = Thresholdout(self.trnds,self.valds)
             self.phi = phi 
             self._phi_func = partial(self.phi, model=self.backbone) #  does partial work on this
-            self._cur_phi_val = self._phi_val # self._phi_val is the API that should be used when accessing phi
+
+            self._cur_phi_val = self.thresholdout.verify(self._phi_func)
+            self._last_phi_update = self.time_step
 
             # calculate the sampling interval
             self._sampling_interval = len(self.trndl) * self.T // self.K
 
             self.log = pd.DataFrame(columns=['t', 'reward', 'is_stop', 'action_id'])
 
-            self._init_observation()
-
-            self.ll.append(self._curr_observation) # TODO should this be here ??
-
-            self.time_step = 0
+            self.ll.append(self._curr_observation) 
 
             logger.info(f"env initialised: {str(self)}")
 
@@ -91,10 +96,8 @@ class AutoTrainEnvironment(gym.Env):
             utils.init_params(self.backbone)
             self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
 
-      @property
-      def _phi_val(self) -> float:
-            # TODO check the logic here again
-            if not hasattr(self, '_last_phi_update') or self._last_phi_update != self.time_step:
+      def _get_phi_val(self) -> float:
+            if self._last_phi_update != self.time_step:
                   self._prev_phi_val = self._cur_phi_val
                   self._cur_phi_val = self.thresholdout.verify(self._phi_func)
                   self._last_phi_update = self.time_step
@@ -102,21 +105,31 @@ class AutoTrainEnvironment(gym.Env):
             return self._cur_phi_val
 
 
-      def _init_observation(self):
-            self._curr_observation = ObservationState(
-                  param_dict=self.backbone.state_dict(),
-                  loss_vec=np.zeros(self.K),
-                  lr=self.lr_init,
-                  phi_val=self._phi_val,
-            )
+      # def _init_observation(self): # might be depreciated 
+      #       self._curr_observation = ObservationState(
+      #             param_dict=self.backbone.state_dict(),
+      #             loss_vec=np.zeros(self.K),
+      #             lr=self.lr_init,
+      #             phi_val=self._get_phi_val(),
+      #       )
 
-      def _set_observation(self, loss_vec: np.array,  phi_val: float):
-            self._curr_observation = ObservationState(
+      # def _set_observation(self, loss_vec: np.array,  phi_val: float): # might be depreciated 
+      #       # append
+      #       self._curr_observation = ObservationState(
+      #             param_dict=self.backbone.state_dict(),
+      #             loss_vec=loss_vec,
+      #             lr=self._curr_lr,
+      #             phi_val=phi_val,
+      #       )
+
+      def _add_observation(self,  loss_vec: np.array,  phi_val: float):
+            o = ObservationState(
                   param_dict=self.backbone.state_dict(),
                   loss_vec=loss_vec,
                   lr=self._curr_lr,
-                  phi_val=phi_val,
-            )
+                  phi_val=phi_val
+                  )
+            self.ll.append(o)
 
       def visualise_data(self):
             """
@@ -168,7 +181,7 @@ class AutoTrainEnvironment(gym.Env):
             loss_vec = self._train_one_cycle()
             
             # set current observation
-            self._set_observation(loss_vec, self._phi_val) # whats this for then
+            self._add_observation(loss_vec, self._get_phi_val) # whats this for then
 
             # get last H observations
             o_history = self.ll.get_observations(self.H)
@@ -178,7 +191,7 @@ class AutoTrainEnvironment(gym.Env):
 
             self.time_step += 1
 
-            return self._process_observation(o_history), step_reward, False, {}
+            return o_history, step_reward, False, {}
 
 
       def _scale_lr(self, scale_factor):
@@ -190,17 +203,14 @@ class AutoTrainEnvironment(gym.Env):
 
 
       def _train_one_cycle(self):
-            """
-            train for T epochs, record 
-            """
-
+            """ train for T epochs, record loss """
             pass
 
       def _compute_final_reward(self):
-            return self._phi_val
+            return self._get_phi_val()
 
       def _compute_intermediate_reward(self):
-            delta = self._phi_val - self._prev_phi_val
+            delta = self._get_phi_val() - self._prev_phi_val
             if  delta > 0:
                   return self._inter_reward
             else:
@@ -208,54 +218,60 @@ class AutoTrainEnvironment(gym.Env):
 
 
       def reset(self):
-            self._init_backbone()
-            self._init_observation()
-            self.ll = StateLinkedList(savedir=self.savedir)
+            self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds)
+            logger.info('environment re-initialized')
+            return self.ll.get_observations(self.H)
 
       def render(self, mode='human', close=False):
+            """render observation """
             pass
 
 
 
-class ObservationState:
-      def __init__(self, param_dict: dict, loss_vec: np.array, lr:float, phi_val: float):
+class ObservationAndState:
+      def __init__(self, param_dict: dict, o: np.array):
             self.param_dict = param_dict
-            self.loss_vec = loss_vec
-            self.phi_val = phi_val
-            self.lr = lr
+            self.o = o
 
+            self.dim = self.o.size
 
-      def __dict__(self):
+      def __dict__(self): # param & observation?
             return {
                   'param_dict': self.param_dict,
-                  'loss_vec': self.loss_vec,
-                  'phi_val': self.phi_val,
-                  'lr': self.lr
+                  'o': self.o
             }
 
       def __repr__(self):
             return str(dict(self))
+
       
-      def numpy(self):
-            pass # TODO
+            
 
 class StateLinkedList:
 
-      def __init__(self, savedir: Path):
+      def __init__(self, savedir: Path, dim: int):
 
             if type(savedir) == str:
                   savedir = Path(savedir) 
 
             assert savedir.exists() and savedir.is_dir(), "please make sure save path exists and is directory"
-            
+            assert dim > 0
+
             self.savedir = savedir
+            self.dim = dim # observation dimension 
 
             self.len = 0 # the id of the next node
 
       def get_observations(self, size):
-            #  zeros ?
-            pass
+            os = []
+            if size > self.len:
+                  for _ in range(size - self.len):
+                        os.append(np.zeros(self.dim))
+                  size = self.len
 
+            os += [self[i]['o'] for i in range(size)]
+            return np.vstack(os)
+            
 
       def append(self, state: ObservationState):
             self.len += 1
@@ -271,14 +287,16 @@ class StateLinkedList:
             return self.len
 
       def __getitem__(self, idx):
-            if idx < -1:
-                  raise ValueError('steps has be > -1')
+            # if idx < 0:
+            #       if idx < -self.len:
+            #             return np.zeros(self.dim)
+            #       else:
+            #             idx = self.len + idx
+            
+            if idx > self.len:
+                  raise ValueError('idx too large')
 
-            if idx == -1:
-                  idx = self.len-1
-
-            state = torch.load(self.node_path(idx))
-            return state
+            return torch.load(self.node_path(idx))
             
 
       def rewind(self, steps: int):
