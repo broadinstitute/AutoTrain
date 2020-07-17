@@ -7,6 +7,8 @@ import torch.optim as optim
 import torch.utils.data as torchdata
 import numpy as np
 
+from functools import partial
+
 INIT_METHODS = [nn.init.xavier_uniform_, nn.init.xavier_normal_, \
                 nn.init.kaiming_uniform_, nn.init.kaiming_normal_]
 

@@ -23,8 +23,8 @@ import logging
 logger = logging.getLogger(__file__)
 
 
-def make_o():
-      # make observation
+def make_o(loss_vec:np.array, lr:float, phi_val:float):
+      return np.concat((loss_vec, [lr, phi_val]), dim=0)
 
 
 class AutoTrainEnvironment(gym.Env):
@@ -123,7 +123,7 @@ class AutoTrainEnvironment(gym.Env):
       #       )
 
       def _add_observation(self,  loss_vec: np.array,  phi_val: float):
-            o = ObservationState(
+            o = ObservationAndState(
                   param_dict=self.backbone.state_dict(),
                   loss_vec=loss_vec,
                   lr=self._curr_lr,
