@@ -104,32 +104,12 @@ class AutoTrainEnvironment(gym.Env):
 
             return self._cur_phi_val
 
-
-      # def _init_observation(self): # might be depreciated 
-      #       self._curr_observation = ObservationState(
-      #             param_dict=self.backbone.state_dict(),
-      #             loss_vec=np.zeros(self.K),
-      #             lr=self.lr_init,
-      #             phi_val=self._get_phi_val(),
-      #       )
-
-      # def _set_observation(self, loss_vec: np.array,  phi_val: float): # might be depreciated 
-      #       # append
-      #       self._curr_observation = ObservationState(
-      #             param_dict=self.backbone.state_dict(),
-      #             loss_vec=loss_vec,
-      #             lr=self._curr_lr,
-      #             phi_val=phi_val,
-      #       )
-
       def _add_observation(self,  loss_vec: np.array,  phi_val: float):
-            o = ObservationAndState(
+            o_state = ObservationAndState(
                   param_dict=self.backbone.state_dict(),
-                  loss_vec=loss_vec,
-                  lr=self._curr_lr,
-                  phi_val=phi_val
-                  )
-            self.ll.append(o)
+                  o=make_o(loss_vec, self._curr_lr, phi_val)
+            )
+            self.ll.append(o_state)
 
       def visualise_data(self):
             """
@@ -274,10 +254,10 @@ class StateLinkedList:
             
 
       def append(self, state: ObservationState):
-            self.len += 1
-            new_node_path = self.node_path(self.len)
 
+            new_node_path = self.node_path(self.len)
             torch.save(dict(state), new_node_path)
+            self.len += 1
 
       def node_path(self, id) -> Path:
             return self.savedir / f'state_{self.len}.ckpt'
@@ -287,12 +267,7 @@ class StateLinkedList:
             return self.len
 
       def __getitem__(self, idx):
-            # if idx < 0:
-            #       if idx < -self.len:
-            #             return np.zeros(self.dim)
-            #       else:
-            #             idx = self.len + idx
-            
+
             if idx > self.len:
                   raise ValueError('idx too large')
 
