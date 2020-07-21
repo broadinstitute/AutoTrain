@@ -24,7 +24,7 @@ logger = logging.getLogger(__file__)
 
 
 def make_o(loss_vec:np.array, lr:float, phi_val:float):
-      return np.concat((loss_vec, [lr, phi_val]), dim=0)
+      return np.concatenate((loss_vec, [lr, phi_val]), axis=0)
 
 
 class AutoTrainEnvironment(gym.Env):
@@ -218,14 +218,14 @@ class ObservationAndState:
 
             self.dim = self.o.size
 
-      def __dict__(self): # param & observation?
+      def to_dict(self):
             return {
                   'param_dict': self.param_dict,
                   'o': self.o
             }
 
       def __repr__(self):
-            return str(dict(self))
+            return f"ObservationAndState Object --> o={self.o} param_dict={self.param_dict}"
 
       
             
@@ -259,7 +259,7 @@ class StateLinkedList:
       def append(self, state: ObservationAndState):
 
             new_node_path = self.node_path(self.len)
-            torch.save(dict(state), new_node_path)
+            torch.save(state, new_node_path)
             self.len += 1
 
       def node_path(self, id) -> Path:
