@@ -38,7 +38,7 @@ class AutoTrainEnvironment(gym.Env):
       def init(self, backbone: nn.Module,  phi: callable, savedir:Path,
              trnds:torchdata.Dataset, valds:torchdata.Dataset, 
              T=3, H=5, K=256, lr_init=3e-4, inter_reward=0.05,
-             num_workers=4, bs=16, v=False):
+             num_workers=4, bs=16, v=False, device=None):
             """
             params:
                   - backbone: nn.Module, neural network architecture for training
@@ -50,18 +50,21 @@ class AutoTrainEnvironment(gym.Env):
                   - K: length of the training loss vector in the observation
             """
             # experiment paramter setup
+            
             self.T, self.H, self.K = T, H, K
             self._inter_reward = inter_reward
             self.v = v # is verbose
-            self.time_step = 0
+            self.device = device
             # rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop 
             self.action_space_dim = self.H*3 + 2 
             # loss_vec of size K + lr + phi_val
             self.observation_space_dim = self.K + 2
+            
+            self.time_step = 0
+
             # model 
             self.ll = StateLinkedList(savedir=savedir, dim=self.observation_space_dim)
             self.backbone = backbone
-
 
             self.criterion = nn.CrossEntropyLoss()
             self.lr_init = self._curr_lr = lr_init
@@ -88,7 +91,7 @@ class AutoTrainEnvironment(gym.Env):
 
             self._add_observation(np.zeros(K), self._get_phi_val())
 
-            self.log(f'environment initialised : {self}')
+            self.log(f'environment initialised : {str(self)}')
 
       def  _init_phi(self):
             self._prev_phi_val = 0
@@ -99,7 +102,7 @@ class AutoTrainEnvironment(gym.Env):
       def _init_backbone(self):
             utils.init_params(self.backbone)
             self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
-            self.log(f'initialised backobone parameters')
+            self.log(f'initialised backbone parameters')
 
 
       def _get_phi_val(self) -> float:
@@ -116,7 +119,7 @@ class AutoTrainEnvironment(gym.Env):
                   o=make_o(loss_vec, self._curr_lr, phi_val)
             )
             self.ll.append(o_state)
-            self.log(f'added observation {o_state}')
+            self.log(f'added observation')
 
       def visualise_data(self):
             """
@@ -168,9 +171,10 @@ class AutoTrainEnvironment(gym.Env):
                   rewind_steps = action - 10
             
             # rewind
-            if rewind_step != 0 and not is_reinit:
+            if rewind_steps != 0 and not is_reinit:
+                  self.log(f'rewind weights [{rewind_steps}] steps back')
                   self.ll.rewind(rewind_steps)
-                  self.log(f'rewind weights [{rewind_step}] steps back')
+                  # TODO reload weights tho
 
             # do training 
             loss_vec = self._train_one_cycle()
@@ -202,23 +206,26 @@ class AutoTrainEnvironment(gym.Env):
             if loss_vec is None:
                   loss_vec = np.zeros(self.K)
 
-            self.model.train()
+            self.backbone.train()
             for i, batch in enumerate(self.trndl):
+                  inputs, labels = batch[0], batch[1]
 
-                  inputs, labels = batch[0].to(DEVICE), batch[1].to(DEVICE)
+                  if self.device:
+                      inputs, labels = inputs.to(self.device), labels.to(self.device)
+            
                   self.opt.zero_grad()
 
-                  outputs = self.model(inputs)
+                  outputs = self.backbone(inputs)
                   loss = self.criterion(outputs, labels)
                   loss.backward()
                   self.opt.step()
 
                   steps += 1
                   
-                  if step % self._sampling_interval == 0:
-                        loss_vec[step] = loss.item()
+                  if steps % self._sampling_interval == 0:
+                        loss_vec[steps // self._sampling_interval] = loss.item()
                   
-                  if step >= self.T:
+                  if steps >= self.T:
                         return loss_vec
             
             self._train_one_cycle(loss_vec=loss_vec, steps=steps)
@@ -237,7 +244,7 @@ class AutoTrainEnvironment(gym.Env):
       def reset(self):
             self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
             T=self.T, H=self.H, K=self.K, lr_init=self.lr_init, inter_reward=self._inter_reward,
-            num_workers=self.num_workers, bs=self.bs, v=self.v)
+            num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
             logger.info('environment re-initialized')
             return self.ll.get_observations(self.H)
@@ -299,8 +306,8 @@ class StateLinkedList:
             torch.save(state, new_node_path)
             self.len += 1
 
-      def node_path(self, id) -> Path:
-            return self.savedir / f'state_{self.len}.ckpt'
+      def node_path(self, idx) -> Path:
+            return self.savedir / f'state_{idx}.ckpt'
 
 
       def __len__(self):
@@ -315,10 +322,11 @@ class StateLinkedList:
             
 
       def rewind(self, steps: int):
+        
 
-            steps = min(steps, self.len)  # remove all its on the caller to check
-
-            for i in range(steps):
+            steps = min(steps, self.len)
+            
+            for i in range(1, steps+1):
                   nodepath = self.node_path(self.len - i)
                   nodepath.unlink()
 
