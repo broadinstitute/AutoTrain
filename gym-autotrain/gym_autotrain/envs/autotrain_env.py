@@ -198,6 +198,9 @@ class AutoTrainEnvironment(gym.Env):
 
 
       def reset(self):
+            # TODO
+            # T=3, H=5, K=256, lr_init=3e-4, inter_reward=0.05,
+            # num_workers=4, bs=16, log_file=None
             self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds)
             logger.info('environment re-initialized')
             return self.ll.get_observations(self.H)
