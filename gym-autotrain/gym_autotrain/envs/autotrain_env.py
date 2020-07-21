@@ -76,7 +76,7 @@ class AutoTrainEnvironment(gym.Env):
             self.time_step = 0
 
             # Thresholdout & statistic of interest
-            self.thresholdout = Thresholdout(self.trnds,self.valds)
+            self.thresholdout = Thresholdout(self.trndl, self.valdl)
             self.phi = phi 
             self._phi_func = partial(self.phi, model=self.backbone) #  does partial work on this
 
@@ -88,7 +88,7 @@ class AutoTrainEnvironment(gym.Env):
 
             self.log = pd.DataFrame(columns=['t', 'reward', 'is_stop', 'action_id'])
 
-            self.ll.append(self._curr_observation) 
+            self._add_observation(np.zeros(K), self._get_phi_val())
 
             logger.info(f"env initialised: {str(self)}")
 
@@ -256,7 +256,7 @@ class StateLinkedList:
             return np.vstack(os)
             
 
-      def append(self, state: ObservationState):
+      def append(self, state: ObservationAndState):
 
             new_node_path = self.node_path(self.len)
             torch.save(dict(state), new_node_path)

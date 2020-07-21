@@ -1,4 +1,3 @@
-
 import torch
 
 import torch.nn as nn
@@ -17,7 +16,7 @@ def init_weights(m, init=nn.init.xavier_uniform):
         init(m.weight)
         m.bias.data.fill_(0.01)
         
-def init_model(model): # TODO
+def init_params(model): # TODO
     func = np.random.choice(INIT_METHODS)
     model.apply(partial(init_weights, init=func))
 
