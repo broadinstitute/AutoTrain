@@ -174,7 +174,9 @@ class AutoTrainEnvironment(gym.Env):
             if rewind_steps != 0 and not is_reinit:
                   self.log(f'rewind weights [{rewind_steps}] steps back')
                   self.ll.rewind(rewind_steps)
-                  # TODO reload weights tho
+
+                  o = self.ll[self.ll.len-1]  # get the latest state after rewind
+                  self.backbone.load_state_dict(o['param_dict'])
 
             # do training 
             loss_vec = self._train_one_cycle()
@@ -315,7 +317,7 @@ class StateLinkedList:
 
       def __getitem__(self, idx):
 
-            if idx > self.len:
+            if idx >= self.len:
                   raise ValueError('idx too large')
 
             return torch.load(self.node_path(idx))
