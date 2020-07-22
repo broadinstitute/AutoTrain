@@ -1,22 +1,3 @@
-import gym
-from gym import error, spaces, utils
-from gym.utils import seeding
-
-import gym_autotrain.envs.utils as utils
-
-from gym_autotrain.envs.thresholdout import Thresholdout
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import torch.utils.data as  torchdata
-
-import pandas as pd
-import numpy as np
-
-from pathlib import Path
-from functools import partial
 
 def make_o(loss_vec:np.array, lr:float, phi_val:float):
       return np.concatenate((loss_vec, [lr, phi_val]), axis=0)
@@ -37,7 +18,7 @@ class AutoTrainEnvironment(gym.Env):
 
       def init(self, backbone: nn.Module,  phi: callable, savedir:Path,
              trnds:torchdata.Dataset, valds:torchdata.Dataset, 
-             T=3, H=5, K=256, lr_init=3e-4, inter_reward=0.05,
+             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05,
              num_workers=4, bs=16, v=False, device=None):
             """
             params:
@@ -45,16 +26,19 @@ class AutoTrainEnvironment(gym.Env):
                   - trainds, valds: Dataset, train and validation datasets
                   - phi: callable, function to be optimised  
 
-                  - T: num epochs that constitutes one time step
+                  - T: num batch updates that constitutes one time step for the environment
                   - H: length of rewind vector
-                  - K: length of the training loss vector in the observation
+                  - S: sampling interval, determines K which is the loss vector
             """
             # experiment paramter setup
             
-            self.T, self.H, self.K = T, H, K
+            self.T, self.H, self.sampling_interval = T, H, S
+            self.K = self.T // self.sampling_interval
+            
             self._inter_reward = inter_reward
             self.v = v # is verbose
             self.device = device
+            self.savedir = savedir
             # rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop 
             self.action_space_dim = self.H*3 + 2 
             # loss_vec of size K + lr + phi_val
@@ -76,7 +60,6 @@ class AutoTrainEnvironment(gym.Env):
 
             self.trndl, self.fixdl, self.valdl =  utils.create_dls(self.trnds, self.valds, bs=bs, num_workers=num_workers)
 
-            self._sampling_interval = len(self.trndl) * self.T // self.K
 
             # Thresholdout & statistic of interest
             self.thresholdout = Thresholdout(self.trndl, self.valdl)
@@ -96,15 +79,17 @@ class AutoTrainEnvironment(gym.Env):
             return self.ll.get_observations(self.H)
 
       def  _init_phi(self):
+            self.log('initialised phi value: started ...')
             self._prev_phi_val = 0
             self._cur_phi_val = self.thresholdout.verify(self._phi_func)
             self._last_phi_update = self.time_step
-            self.log('initialised phi value')
+            self.log('initialised phi value: done')
 
       def _init_backbone(self):
 
             if self.device:
-                  self.backbone.to(self.device)
+                  self.backbone.to(self.device) # check
+
             utils.init_params(self.backbone)
 
             self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
@@ -135,18 +120,13 @@ class AutoTrainEnvironment(gym.Env):
             """
             pass 
 
-      def step(self, action_vec): 
+      def step(self, action: int): 
             """
-            a step in an environment consitiutes of:
-                   - check for stop; if stop  then calculate final reward else
-                   - scale learning rate
-                   - rewind/keep weights 
-                   - do training step
-                   - calculate intermediate reward
+            step(self, action: int):
+                @action: index of the max value of the action probability vector 
             
             """
 
-            action = torch.argmax(action_vec, dim=-1).item()
             self.log(f'action [{action}] recieved')
 
             is_stop = action == self.action_space_dim
@@ -164,7 +144,7 @@ class AutoTrainEnvironment(gym.Env):
                   rewind_steps = action
                   self.log(f'decreased lr by 10% -> [lr:{self._curr_lr}]')
             elif action >= 5 and action < 10:
-                  rewind_steps = action - 5
+                  rewind_steps = action - 5 
             else:
                   self._scale_lr(1.1)
                   self.log(f'increased lr by 10% -> [lr:{self._curr_lr}]')
@@ -177,7 +157,7 @@ class AutoTrainEnvironment(gym.Env):
                   self._init_backbone()
 
                   self._init_phi()
-                  self._add_observation(np.zeros(K), self._get_phi_val()) # do we add here or no
+                  self._add_observation(np.zeros(self.K), self._get_phi_val()) # do we add here or no
 
                   self.ll = StateLinkedList(savedir=self.savedir, dim=self.observation_space_dim)
 
@@ -189,7 +169,6 @@ class AutoTrainEnvironment(gym.Env):
 
             # do training 
             loss_vec = self._train_one_cycle()
-            
             # set current observation
             self._add_observation(loss_vec, self._get_phi_val()) # whats this for then
 
@@ -212,6 +191,7 @@ class AutoTrainEnvironment(gym.Env):
 
 
       def _train_one_cycle(self, loss_vec=None, steps=0):
+            print('train called, loss_vec: ', loss_vec, ' steps ',steps)
             if loss_vec is None:
                   loss_vec = np.zeros(self.K)
 
@@ -230,15 +210,15 @@ class AutoTrainEnvironment(gym.Env):
                   self.opt.step()
 
                   steps += 1
-                  
-                  if steps % self._sampling_interval == 0:
-                        loss_vec[steps // self._sampling_interval] = loss.item()
-                  
+                    
                   if steps >= self.T:
                         self.time_step += 1 # this defines the time step
                         return loss_vec
-            
-            self._train_one_cycle(loss_vec=loss_vec, steps=steps)
+                  
+                  if steps % self.sampling_interval == 0:
+                        loss_vec[(steps // self.sampling_interval) - 1] = loss.item()
+                
+            return self._train_one_cycle(loss_vec=loss_vec, steps=steps)
 
       def _compute_final_reward(self):
             return self._get_phi_val()
@@ -304,7 +284,7 @@ class StateLinkedList:
                         os.append(np.zeros(self.dim))
                   size = self.len
 
-            os += [self[i]['o'] for i in range(size)]
+            os += [self[i].o for i in range(size)]
             return np.vstack(os)
             
 

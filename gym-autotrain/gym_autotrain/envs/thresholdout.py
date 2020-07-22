@@ -21,6 +21,6 @@ class Thresholdout:
         delta = abs(train_val - holdout_val)
         
         if delta > self.T + self.eta():
-            return holdout_val + self.eps(), True
+            return holdout_val + self.eps()
         else:
-            return train_val, False
+            return train_val
