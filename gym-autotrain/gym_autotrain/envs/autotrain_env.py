@@ -91,7 +91,9 @@ class AutoTrainEnvironment(gym.Env):
 
             self._add_observation(np.zeros(K), self._get_phi_val())
 
-            self.log(f'environment initialised : {str(self)}')
+            self.log(f'environment initialised : {self.__repr__()}')
+            
+            return self.ll.get_observations(self.H)
 
       def  _init_phi(self):
             self._prev_phi_val = 0
@@ -100,9 +102,13 @@ class AutoTrainEnvironment(gym.Env):
             self.log('initialised phi value')
 
       def _init_backbone(self):
+
+            if self.device:
+                  self.backbone.to(self.device)
             utils.init_params(self.backbone)
+
             self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
-            self.log(f'initialised backbone parameters')
+            self.log(f'initialised backbone parameters & optimizer')
 
 
       def _get_phi_val(self) -> float:
@@ -151,12 +157,6 @@ class AutoTrainEnvironment(gym.Env):
                   self.log(f'recieved STOP signal, final reward is: [{final_reward}]')
                   return None, final_reward, True, {}
 
-            if is_reinit:
-                  self.log(f'recieved RE-INIT signal')
-                  self._init_backbone()
-                  self._init_phi()
-                  self.ll = StateLinkedList(savedir=self.savedir)
-
 
             # lr and rewind steps
             if action < 5:
@@ -170,11 +170,20 @@ class AutoTrainEnvironment(gym.Env):
                   self.log(f'increased lr by 10% -> [lr:{self._curr_lr}]')
                   rewind_steps = action - 10
             
-            # rewind
-            if rewind_steps != 0 and not is_reinit:
+
+            if rewind_steps >= self.ll.len or is_reinit:
+                  self.log(f'recieved RE-INIT signal or rewind_steps[{rewind_steps}] > len(ll)')
+
+                  self._init_backbone()
+
+                  self._init_phi()
+                  self._add_observation(np.zeros(K), self._get_phi_val()) # do we add here or no
+
+                  self.ll = StateLinkedList(savedir=self.savedir, dim=self.observation_space_dim)
+
+            elif rewind_steps != 0:
                   self.log(f'rewind weights [{rewind_steps}] steps back')
                   self.ll.rewind(rewind_steps)
-
                   o = self.ll[self.ll.len-1]  # get the latest state after rewind
                   self.backbone.load_state_dict(o['param_dict'])
 
@@ -182,7 +191,7 @@ class AutoTrainEnvironment(gym.Env):
             loss_vec = self._train_one_cycle()
             
             # set current observation
-            self._add_observation(loss_vec, self._get_phi_val) # whats this for then
+            self._add_observation(loss_vec, self._get_phi_val()) # whats this for then
 
             # get last H observations
             o_history = self.ll.get_observations(self.H)
@@ -190,8 +199,6 @@ class AutoTrainEnvironment(gym.Env):
             # compute intermediate reward
             step_reward = self._compute_intermediate_reward()
             self.log(f'reward at the end of time step is [{step_reward}]')
-
-            self.time_step += 1
 
             return o_history, step_reward, False, {}
 
@@ -228,6 +235,7 @@ class AutoTrainEnvironment(gym.Env):
                         loss_vec[steps // self._sampling_interval] = loss.item()
                   
                   if steps >= self.T:
+                        self.time_step += 1 # this defines the time step
                         return loss_vec
             
             self._train_one_cycle(loss_vec=loss_vec, steps=steps)
@@ -244,15 +252,13 @@ class AutoTrainEnvironment(gym.Env):
 
 
       def reset(self):
-            self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
+
+            return self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
             T=self.T, H=self.H, K=self.K, lr_init=self.lr_init, inter_reward=self._inter_reward,
             num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
-            logger.info('environment re-initialized')
-            return self.ll.get_observations(self.H)
-
       def render(self, mode='human', close=False):
-            """render observation """
+            """render observation; for that need to add logs"""
             pass
 
 
@@ -324,11 +330,11 @@ class StateLinkedList:
             
 
       def rewind(self, steps: int):
-        
 
             steps = min(steps, self.len)
             
             for i in range(1, steps+1):
+                  print('rewind')
                   nodepath = self.node_path(self.len - i)
                   nodepath.unlink()
 
