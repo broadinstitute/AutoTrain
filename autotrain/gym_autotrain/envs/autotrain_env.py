@@ -8,7 +8,6 @@ from gym_autotrain.envs.thresholdout import Thresholdout
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data as  torchdata
 
@@ -18,6 +17,8 @@ import numpy as np
 from pathlib import Path
 from functools import partial
 import pickle as pkl
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
 def make_o(loss_vec: np.array, lr: float, phi_val: float):
@@ -100,7 +101,7 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history']) # length of ll
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history'])  #  length of ll
         self.logloss = []  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
@@ -304,6 +305,37 @@ class AutoTrainEnvironment(gym.Env):
     def render(self, mode='human', close=False):
         """render observation; for that need to add logs"""
         pass
+
+    def plot_loss(self):
+        history = np.concatenate(self.logloss, axis=0)
+        ax = sns.lineplot(x=range(len(history)), y=history)
+        ax.set(xlabel='batch updates (v. line is step delim.)', ylabel='loss value')
+
+        for i in range(1, len(self.logloss)):
+            plt.axvline(self.K * i, ls='-')
+
+        plt.title('loss plot vs batch update')
+
+    def plot_mdp(self, figsize=(7, 7)):
+        """plot reward and phi value"""
+        f, axes = plt.subplots(2, 2, figsize=figsize, sharex=True)
+        sns.despine(left=True)
+        # 'phi', 'reward', 'action', 'weights history'
+
+        sns.lineplot(data=self.logmdp, x='t', y='phi', ax=axes[0, 0])
+        axes[0, 0].set_title('phi val')
+
+        sns.lineplot(data=self.logmdp, x='t', y='reward', ax=axes[0, 1])
+        axes[0, 1].set_title('reward')
+
+        cum_reward_mdp = self.logmdp.cumsum(axis='reward')
+
+        sns.lineplot(data=cum_reward_mdp, x='t', y='reward', ax=axes[1, 0])
+        axes[1, 0].set_title('cumulative reward')
+
+        sns.lineplot(data=self.logmdp, x='t', y='weights history', ax=axes[1, 1])
+        axes[1, 1].set_title('weights history')
+
 
 
 class ObservationAndState:
