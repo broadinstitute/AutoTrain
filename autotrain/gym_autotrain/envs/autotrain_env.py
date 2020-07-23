@@ -70,6 +70,8 @@ class AutoTrainEnvironment(gym.Env):
         self._inter_reward = inter_reward
         self.v = v  # is verbose
         self.device = device
+        self.bs = self.bs
+        self.num_workers = num_workers
         self.savedir = savedir
         #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
         self.action_space_dim = self.H * 3 + 2
@@ -289,7 +291,7 @@ class AutoTrainEnvironment(gym.Env):
     def _compute_final_reward(self):
         return self._get_phi_val()
 
-    def _compute_intermediate_reward(self):
+    def _compute_intermediate_reward(self):  # check logic here
         delta = self._get_phi_val() - self._prev_phi_val
         if delta > 0:
             return self._inter_reward
@@ -299,7 +301,7 @@ class AutoTrainEnvironment(gym.Env):
     def reset(self):
 
         return self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
-                         T=self.T, H=self.H, K=self.K, lr_init=self.lr_init, inter_reward=self._inter_reward,
+                         T=self.T, H=self.H, lr_init=self.lr_init, inter_reward=self._inter_reward,
                          num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
     def render(self, mode='human', close=False):
@@ -335,7 +337,6 @@ class AutoTrainEnvironment(gym.Env):
 
         sns.lineplot(data=self.logmdp, x='t', y='weights history', ax=axes[1, 1])
         axes[1, 1].set_title('weights history')
-
 
 
 class ObservationAndState:
