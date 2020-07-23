@@ -100,7 +100,7 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action'])
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history']) # length of ll
         self.logloss = []  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
@@ -148,7 +148,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # vrb actions are good, easier to inspect
 
-        self.logmdp[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb]
+        self.logmdp[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len]
 
         self.logloss[self.time_step] = loss_vec
 
