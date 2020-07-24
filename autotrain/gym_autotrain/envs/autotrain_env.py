@@ -8,7 +8,6 @@ from gym_autotrain.envs.thresholdout import Thresholdout
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data as  torchdata
 
@@ -18,6 +17,8 @@ import numpy as np
 from pathlib import Path
 from functools import partial
 import pickle as pkl
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
 def make_o(loss_vec: np.array, lr: float, phi_val: float):
@@ -69,6 +70,8 @@ class AutoTrainEnvironment(gym.Env):
         self._inter_reward = inter_reward
         self.v = v  # is verbose
         self.device = device
+        self.bs = self.bs
+        self.num_workers = num_workers
         self.savedir = savedir
         #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
         self.action_space_dim = self.H * 3 + 2
@@ -100,7 +103,7 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action'])
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history'])  #  length of ll
         self.logloss = []  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
@@ -148,7 +151,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # vrb actions are good, easier to inspect
 
-        self.logmdp[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb]
+        self.logmdp[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len]
 
         self.logloss[self.time_step] = loss_vec
 
@@ -288,7 +291,7 @@ class AutoTrainEnvironment(gym.Env):
     def _compute_final_reward(self):
         return self._get_phi_val()
 
-    def _compute_intermediate_reward(self):
+    def _compute_intermediate_reward(self):  # check logic here
         delta = self._get_phi_val() - self._prev_phi_val
         if delta > 0:
             return self._inter_reward
@@ -298,12 +301,42 @@ class AutoTrainEnvironment(gym.Env):
     def reset(self):
 
         return self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
-                         T=self.T, H=self.H, K=self.K, lr_init=self.lr_init, inter_reward=self._inter_reward,
+                         T=self.T, H=self.H, lr_init=self.lr_init, inter_reward=self._inter_reward,
                          num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
     def render(self, mode='human', close=False):
         """render observation; for that need to add logs"""
         pass
+
+    def plot_loss(self):
+        history = np.concatenate(self.logloss, axis=0)
+        ax = sns.lineplot(x=range(len(history)), y=history)
+        ax.set(xlabel='batch updates (v. line is step delim.)', ylabel='loss value')
+
+        for i in range(1, len(self.logloss)):
+            plt.axvline(self.K * i, ls='-')
+
+        plt.title('loss plot vs batch update')
+
+    def plot_mdp(self, figsize=(7, 7)):
+        """plot reward and phi value"""
+        f, axes = plt.subplots(2, 2, figsize=figsize, sharex=True)
+        sns.despine(left=True)
+        # 'phi', 'reward', 'action', 'weights history'
+
+        sns.lineplot(data=self.logmdp, x='t', y='phi', ax=axes[0, 0])
+        axes[0, 0].set_title('phi val')
+
+        sns.lineplot(data=self.logmdp, x='t', y='reward', ax=axes[0, 1])
+        axes[0, 1].set_title('reward')
+
+        cum_reward_mdp = self.logmdp.cumsum(axis='reward')
+
+        sns.lineplot(data=cum_reward_mdp, x='t', y='reward', ax=axes[1, 0])
+        axes[1, 0].set_title('cumulative reward')
+
+        sns.lineplot(data=self.logmdp, x='t', y='weights history', ax=axes[1, 1])
+        axes[1, 1].set_title('weights history')
 
 
 class ObservationAndState:
