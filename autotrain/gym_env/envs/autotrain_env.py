@@ -2,9 +2,9 @@ import gym
 from gym import error, spaces
 from gym.utils import seeding
 
-import gym_autotrain.envs.utils as utils
+import autotrain.gym_env.envs.utils as utils
 
-from gym_autotrain.envs.thresholdout import Thresholdout
+from autotrain.gym_env.envs.thresholdout import Thresholdout
 
 import torch
 import torch.nn as nn
