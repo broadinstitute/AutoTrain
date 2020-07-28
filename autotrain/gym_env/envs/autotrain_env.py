@@ -70,7 +70,7 @@ class AutoTrainEnvironment(gym.Env):
         self._inter_reward = inter_reward
         self.v = v  # is verbose
         self.device = device
-        self.bs = self.bs
+        self.bs = bs
         self.num_workers = num_workers
         self.savedir = savedir
         #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
@@ -104,7 +104,7 @@ class AutoTrainEnvironment(gym.Env):
         #  calculate the sampling interval
 
         self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history'])  #  length of ll
-        self.logloss = []  # array of loss vectors; idx is timestep
+        self.logloss = dict()  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
         self._append_log(np.zeros(self.K), self._get_phi_val(), "ENV INIT", 0)
@@ -151,7 +151,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # vrb actions are good, easier to inspect
 
-        self.logmdp[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len]
+        self.logmdp.loc[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len]
 
         self.logloss[self.time_step] = loss_vec
 
@@ -234,8 +234,8 @@ class AutoTrainEnvironment(gym.Env):
         elif rewind_steps != 0:
             self.log(f'rewind weights [{rewind_steps}] steps back')
             self.ll.rewind(rewind_steps)
-            o = self.ll[self.ll.len - 1]  # get the latest state after rewind
-            self.backbone.load_state_dict(o['param_dict'])
+            state = self.ll[self.ll.len - 1]  # get the latest state after rewind
+            self.backbone.load_state_dict(state.param_dict)
 
         # do training
         loss_vec = self._train_one_cycle()
@@ -259,7 +259,6 @@ class AutoTrainEnvironment(gym.Env):
         self._curr_lr *= scale_factor
 
     def _train_one_cycle(self, loss_vec=None, steps=0):
-        print('train called, loss_vec: ', loss_vec, ' steps ', steps)
         if loss_vec is None:
             loss_vec = np.zeros(self.K)
 
@@ -309,7 +308,7 @@ class AutoTrainEnvironment(gym.Env):
         pass
 
     def plot_loss(self):
-        history = np.concatenate(self.logloss, axis=0)
+        history = np.concatenate(list(self.logloss.values()), axis=0)
         ax = sns.lineplot(x=range(len(history)), y=history)
         ax.set(xlabel='batch updates (v. line is step delim.)', ylabel='loss value')
 
@@ -405,7 +404,6 @@ class StateLinkedList:
         steps = min(steps, self.len)
 
         for i in range(1, steps + 1):
-            print('rewind')
             nodepath = self.node_path(self.len - i)
             nodepath.unlink()
 
