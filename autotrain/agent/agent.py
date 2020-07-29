@@ -6,8 +6,8 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 
-import dqn
-import replay_memory
+import autotrain.agent.dqn as dqn
+import autotrain.agent.replay_memory as replay_memory
 
 BATCH_SIZE = 128
 GAMMA = 0.999
@@ -17,7 +17,7 @@ EPS_DECAY = 200
 TARGET_UPDATE = 10
 
 
-class RLAgent():
+class RLAgent:
 
     def __init__(self, env, device):
         
