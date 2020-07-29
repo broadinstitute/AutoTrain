@@ -50,7 +50,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, backbone: nn.Module, phi: callable, savedir: Path,
              trnds: torchdata.Dataset, valds: torchdata.Dataset,
-             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05,
+             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05, horizon=100,
              num_workers=4, bs=16, v=False, device=None):
         """
         params:
@@ -66,17 +66,18 @@ class AutoTrainEnvironment(gym.Env):
 
         self.T, self.H, self.sampling_interval = T, H, S
         self.K = self.T // self.sampling_interval
-
+        self.horizon = horizon
         self._inter_reward = inter_reward
         self.v = v  # is verbose
         self.device = device
         self.bs = bs
         self.num_workers = num_workers
         self.savedir = savedir
+        
         #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
         self.action_space_dim = self.H * 3 + 2
         # loss_vec of size K + lr + phi_val
-        self.observation_space_dim = self.K + 2
+        self.observation_space_dim = (self.K + 2) * H
 
         self.time_step = 0
 
@@ -203,10 +204,10 @@ class AutoTrainEnvironment(gym.Env):
         is_stop = action == self.action_space_dim
         is_reinit = action == self.action_space_dim - 1
 
-        if is_stop:
+        if is_stop or if self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
             self._append_log(np.zeros(self.K), self._get_phi_val(), action, step_reward)
-            self.log(f'recieved STOP signal, final reward is: [{final_reward}]')
+            self.log(f'recieved STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
             return None, final_reward, True, {}
 
         # lr and rewind steps

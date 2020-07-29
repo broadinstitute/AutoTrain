@@ -6,7 +6,8 @@
 data/
 logs/
 weightsH/
-
+autotrain-run/
+autotrain-run-*/
 
 .ipynb_checkpoints/
 __pycache__/
