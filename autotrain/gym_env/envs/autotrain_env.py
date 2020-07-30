@@ -50,7 +50,8 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, backbone: nn.Module, phi: callable, savedir: Path,
              trnds: torchdata.Dataset, valds: torchdata.Dataset,
-             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05, horizon=100,
+             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05, 
+             horizon=50, criterion=nn.CrossEntropyLoss(),
              num_workers=4, bs=16, v=False, device=None):
         """
         params:
@@ -82,10 +83,10 @@ class AutoTrainEnvironment(gym.Env):
         self.time_step = 0
 
         # model
-        self.ll = StateLinkedList(savedir=savedir, dim=self.observation_space_dim)
+        self.ll = StateLinkedList(savedir=savedir, dim=self.K+2)
         self.backbone = backbone
 
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = criterion
         self.lr_init = self._curr_lr = lr_init
 
         self._init_backbone()
@@ -200,13 +201,14 @@ class AutoTrainEnvironment(gym.Env):
         """
 
         self.log(f'action [{action}] recieved')
+        assert action < self.action_space_dim, 'invalid action value'
 
-        is_stop = action == self.action_space_dim
-        is_reinit = action == self.action_space_dim - 1
+        is_stop = action == self.action_space_dim - 1 # TODO check logic
+        is_reinit = action == self.action_space_dim - 2
 
-        if is_stop or if self.time_step + 1 >= self.horizon:
+        if is_stop or self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
-            self._append_log(np.zeros(self.K), self._get_phi_val(), action, step_reward)
+            self._append_log(np.zeros(self.K), self._get_phi_val(), action, final_reward)
             self.log(f'recieved STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
             return None, final_reward, True, {}
 
@@ -226,11 +228,12 @@ class AutoTrainEnvironment(gym.Env):
             self.log(f'recieved RE-INIT signal or rewind_steps[{rewind_steps}] > len(ll)')
 
             self._init_backbone()
-
+            phi_temp = self._get_phi_val()
             self._init_phi()
+            self._prev_phi_val = phi_temp
             self._add_observation(np.zeros(self.K), self._get_phi_val())  #  do we add here or no
 
-            self.ll = StateLinkedList(savedir=self.savedir, dim=self.observation_space_dim)
+            self.ll = StateLinkedList(savedir=self.savedir, dim=self.K+2)
 
         elif rewind_steps != 0:
             self.log(f'rewind weights [{rewind_steps}] steps back')
@@ -261,6 +264,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def _train_one_cycle(self, loss_vec=None, steps=0):
         if loss_vec is None:
+            self.log('training loop started ...')
             loss_vec = np.zeros(self.K)
 
         self.backbone.train()
@@ -281,6 +285,7 @@ class AutoTrainEnvironment(gym.Env):
 
             if steps >= self.T:
                 self.time_step += 1  #  this defines the time step
+                self.log('training loop done!')
                 return loss_vec
 
             if steps % self.sampling_interval == 0:
@@ -301,7 +306,8 @@ class AutoTrainEnvironment(gym.Env):
     def reset(self):
 
         return self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
-                         T=self.T, H=self.H, lr_init=self.lr_init, inter_reward=self._inter_reward,
+                         T=self.T, H=self.H, S=self.sampling_interval, lr_init=self.lr_init, inter_reward=self._inter_reward,
+                         horizon=self.horizon, criterion=self.criterion,
                          num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
     def render(self, mode='human', close=False):
@@ -379,6 +385,9 @@ class StateLinkedList:
             size = self.len
 
         os += [self[i].o for i in range(size)]
+#         print('o dim: ', self.dim)
+#         print('os shape: ', [o.shape for o in os])
+#         print('os: ', os)
         return np.vstack(os)
 
     def append(self, state: ObservationAndState):
