@@ -1,5 +1,6 @@
 import random
 from collections import namedtuple
+import pickle as pkl
 
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
@@ -24,3 +25,7 @@ class ReplayMemory(object):
 
     def __len__(self):
         return len(self.memory)
+    
+    def save(self, path):
+        with open(path, 'wb') as fp:
+            pkl.dump(self.memory, fp)
