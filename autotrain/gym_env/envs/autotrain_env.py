@@ -77,8 +77,8 @@ class AutoTrainEnvironment(gym.Env):
         self.num_workers = num_workers
         self.savedir = savedir
 
-        #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
-        self.action_space_dim = self.H * 3 + 2
+        #
+        self.action_space_dim = 7
         # loss_vec of size K + lr + phi_val
         self.observation_space_dim = (self.K + 2) * H
 
@@ -107,8 +107,8 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'clf. optim. steps', 'lr' ])  #  length of ll
-        self.logloss = dict()  # array of loss vectors; idx is timestep
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'clf. optim. steps', 'lr'])
+        self.logloss = dict()
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
         self._append_log(np.zeros(self.K), self._get_phi_val(), "ENV INIT", 0)
@@ -200,10 +200,17 @@ class AutoTrainEnvironment(gym.Env):
         """
         step(self, action: int):
             @action: index of the max value of the action probability vector
-
+        action vector:
+            0 - keep constant
+            1 - decrease 20%
+            2 - decrease 80%
+            3 - increase 20%
+            4 - increase 80%
+            5 - re-init & keep constant
+            6 - stop
         """
 
-        self.log(f'action [{action}] recieved')
+        self.log(f'action [{action}] received')
         assert action < self.action_space_dim, 'invalid action value'
 
         is_stop = action == self.action_space_dim - 1
@@ -215,35 +222,27 @@ class AutoTrainEnvironment(gym.Env):
             self.log(f'received STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
             return None, final_reward, True, {}
 
-        # lr and rewind steps
-        if action < 5:
-            self._scale_lr(0.9)
-            rewind_steps = action
-            self.log(f'decreased lr by 10% -> [lr:{self._curr_lr}]')
-
-        elif 10 > action >= 5:
-            rewind_steps = action - 5
-        else:
-            self._scale_lr(1.1)
-            self.log(f'increased lr by 10% -> [lr:{self._curr_lr}]')
-            rewind_steps = action - 10
-
-        if rewind_steps >= self.ll.len or is_reinit:
-            self.log(f'received RE-INIT signal or rewind_steps[{rewind_steps}] > len(ll)')
+        elif is_reinit:
+            self.log(f'received RE-INIT signal')
 
             self._init_backbone()
             self.ll = StateLinkedList(savedir=self.savedir, dim=self.K + 2)
 
-        elif rewind_steps != 0:
-            self.log(f'rewind weights [{rewind_steps}] steps back')
-            self.ll.rewind(rewind_steps)
-            state = self.ll[self.ll.len - 1]  # get the latest state after rewind
-            self.backbone.load_state_dict(state.param_dict)
+        # lr scaling; if 0 just train
+        elif action == 1:
+            self._scale_lr(0.8)
+        elif action == 2:
+            self._scale_lr(0.2)
+        elif action == 3:
+            self._scale_lr(1.2)
+        elif action == 4:
+            self._scale_lr(1.8)
 
         # do training
         loss_vec = self._train_one_cycle()
 
         self._add_observation(loss_vec, self._get_phi_val())
+
         # get last H observations
         o_history = self.ll.get_observations(self.H)
 
