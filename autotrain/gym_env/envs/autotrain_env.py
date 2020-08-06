@@ -107,7 +107,7 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history'])  #  length of ll
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'clf. optim. steps', 'lr' ])  #  length of ll
         self.logloss = dict()  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
