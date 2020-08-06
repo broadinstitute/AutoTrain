@@ -33,7 +33,8 @@ class AutoTrainEnvironment(gym.Env):
 
     def __repr__(self):
         return f"""AutoTrainEnvironment with the following parameters:
-                        lr_init={self.lr_init}, inter_reward={self._inter_reward}, H={self.H}, K={self.K}, T={self.T}"""
+                        lr_init={self.lr_init}, inter_reward={self._inter_reward}, 
+                        H={self.H}, K={self.K}, T={self.T}"""
 
     def log(self, s):
         if self.v: print(f'[time_step:{self.time_step}] ', s)
@@ -50,7 +51,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, backbone: nn.Module, phi: callable, savedir: Path,
              trnds: torchdata.Dataset, valds: torchdata.Dataset,
-             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05, 
+             T=3, H=5, S=2, lr_init=3e-4, inter_reward=0.05, final_reward_scale=10,
              horizon=50, criterion=nn.CrossEntropyLoss(),
              num_workers=4, bs=16, v=False, device=None):
         """
@@ -69,12 +70,13 @@ class AutoTrainEnvironment(gym.Env):
         self.K = self.T // self.sampling_interval
         self.horizon = horizon
         self._inter_reward = inter_reward
+        self._fr_scale = final_reward_scale
         self.v = v  # is verbose
         self.device = device
         self.bs = bs
         self.num_workers = num_workers
         self.savedir = savedir
-        
+
         #  rewind actions * lr_scale actions [decrease  10%, keep, increase 10%] + reinit + stop
         self.action_space_dim = self.H * 3 + 2
         # loss_vec of size K + lr + phi_val
@@ -83,7 +85,7 @@ class AutoTrainEnvironment(gym.Env):
         self.time_step = 0
 
         # model
-        self.ll = StateLinkedList(savedir=savedir, dim=self.K+2)
+        self.ll = StateLinkedList(savedir=savedir, dim=self.K + 2)
         self.backbone = backbone
 
         self.criterion = criterion
@@ -105,7 +107,8 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history', 'lr'])  #  length of ll
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'clf. optim. steps', 'lr' ])  #  length of ll
+
         self.logloss = dict()  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
@@ -122,6 +125,15 @@ class AutoTrainEnvironment(gym.Env):
         self._last_phi_update = self.time_step
         self.log('initialised phi value: done')
 
+    def _get_phi_val(self) -> float:
+
+        if self._last_phi_update != self.time_step:
+            self._prev_phi_val = self._cur_phi_val
+            self._cur_phi_val = self.thresholdout.verify(self._phi_func)
+            self._last_phi_update = self.time_step
+
+        return self._cur_phi_val
+
     def _init_backbone(self):
 
         if self.device:
@@ -129,7 +141,8 @@ class AutoTrainEnvironment(gym.Env):
 
         utils.init_params(self.backbone)
 
-        self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init) # _curr_lr
+
+        self.opt = optim.Adam(self.backbone.parameters(), lr=self._curr_lr)
         self.log(f'initialised backbone parameters & optimizer')
 
     def _get_verb_action(self, action_id: int) -> str:
@@ -153,7 +166,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # vrb actions are good, easier to inspect
 
-        self.logmdp.loc[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len]
+        self.logmdp.loc[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len, self._curr_lr]
 
         self.logloss[self.time_step] = loss_vec
 
@@ -168,14 +181,6 @@ class AutoTrainEnvironment(gym.Env):
 
         with (savedir / 'env_params.pkl').open('wb') as fp:
             pkl.dump(self.get_env_params(), fp)
-
-    def _get_phi_val(self) -> float:
-        if self._last_phi_update != self.time_step:
-            self._prev_phi_val = self._cur_phi_val
-            self._cur_phi_val = self.thresholdout.verify(self._phi_func)
-            self._last_phi_update = self.time_step
-
-        return self._cur_phi_val
 
     def _add_observation(self, loss_vec: np.array, phi_val: float):  #  maybe use record log here
         o_state = ObservationAndState(
@@ -203,13 +208,13 @@ class AutoTrainEnvironment(gym.Env):
         self.log(f'action [{action}] recieved')
         assert action < self.action_space_dim, 'invalid action value'
 
-        is_stop = action == self.action_space_dim - 1 # TODO check logic
+        is_stop = action == self.action_space_dim - 1
         is_reinit = action == self.action_space_dim - 2
 
         if is_stop or self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
-            self._append_log(np.zeros(self.K), self._get_phi_val(), action, final_reward)
-            self.log(f'recieved STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
+            self._append_log(np.zeros(self.K), self._get_phi_val(), self._get_verb_action(action), final_reward)
+            self.log(f'received STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
             return None, final_reward, True, {}
 
         # lr and rewind steps
@@ -217,7 +222,8 @@ class AutoTrainEnvironment(gym.Env):
             self._scale_lr(0.9)
             rewind_steps = action
             self.log(f'decreased lr by 10% -> [lr:{self._curr_lr}]')
-        elif action >= 5 and action < 10:
+
+        elif 10 > action >= 5:
             rewind_steps = action - 5
         else:
             self._scale_lr(1.1)
@@ -225,15 +231,10 @@ class AutoTrainEnvironment(gym.Env):
             rewind_steps = action - 10
 
         if rewind_steps >= self.ll.len or is_reinit:
-            self.log(f'recieved RE-INIT signal or rewind_steps[{rewind_steps}] > len(ll)')
+            self.log(f'received RE-INIT signal or rewind_steps[{rewind_steps}] > len(ll)')
 
             self._init_backbone()
-            phi_temp = self._get_phi_val()
-            self._init_phi()
-            self._prev_phi_val = phi_temp
-            self._add_observation(np.zeros(self.K), self._get_phi_val())  #  do we add here or no
-
-            self.ll = StateLinkedList(savedir=self.savedir, dim=self.K+2)
+            self.ll = StateLinkedList(savedir=self.savedir, dim=self.K + 2)
 
         elif rewind_steps != 0:
             self.log(f'rewind weights [{rewind_steps}] steps back')
@@ -243,8 +244,8 @@ class AutoTrainEnvironment(gym.Env):
 
         # do training
         loss_vec = self._train_one_cycle()
-        # set current observation
-        self._add_observation(loss_vec, self._get_phi_val())  #  whats this for then
+
+        self._add_observation(loss_vec, self._get_phi_val())
         # get last H observations
         o_history = self.ll.get_observations(self.H)
 
@@ -294,7 +295,7 @@ class AutoTrainEnvironment(gym.Env):
         return self._train_one_cycle(loss_vec=loss_vec, steps=steps)
 
     def _compute_final_reward(self):
-        return self._get_phi_val()
+        return self._get_phi_val() * self._fr_scale
 
     def _compute_intermediate_reward(self):  # check logic here
         delta = self._get_phi_val() - self._prev_phi_val
@@ -306,7 +307,8 @@ class AutoTrainEnvironment(gym.Env):
     def reset(self):
 
         return self.init(self.backbone, self.phi, self.savedir, self.trnds, self.valds,
-                         T=self.T, H=self.H, S=self.sampling_interval, lr_init=self.lr_init, inter_reward=self._inter_reward,
+                         T=self.T, H=self.H, S=self.sampling_interval, lr_init=self.lr_init,
+                         inter_reward=self._inter_reward, final_reward_scale=self._fr_scale,
                          horizon=self.horizon, criterion=self.criterion,
                          num_workers=self.num_workers, bs=self.bs, v=self.v, device=self.device)
 
@@ -385,9 +387,9 @@ class StateLinkedList:
             size = self.len
 
         os += [self[i].o for i in range(size)]
-#         print('o dim: ', self.dim)
-#         print('os shape: ', [o.shape for o in os])
-#         print('os: ', os)
+        #         print('o dim: ', self.dim)
+        #         print('os shape: ', [o.shape for o in os])
+        #         print('os: ', os)
         return np.vstack(os)
 
     def append(self, state: ObservationAndState):
