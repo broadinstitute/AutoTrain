@@ -105,7 +105,7 @@ class AutoTrainEnvironment(gym.Env):
 
         #  calculate the sampling interval
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history'])  #  length of ll
+        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'weights history', 'lr'])  #  length of ll
         self.logloss = dict()  # array of loss vectors; idx is timestep
 
         self._add_observation(np.zeros(self.K), self._get_phi_val())
@@ -129,7 +129,7 @@ class AutoTrainEnvironment(gym.Env):
 
         utils.init_params(self.backbone)
 
-        self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init)
+        self.opt = optim.Adam(self.backbone.parameters(), lr=self.lr_init) # _curr_lr
         self.log(f'initialised backbone parameters & optimizer')
 
     def _get_verb_action(self, action_id: int) -> str:
