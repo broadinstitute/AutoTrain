@@ -140,25 +140,25 @@ class AutoTrainEnvironment(gym.Env):
 
         utils.init_params(self.backbone)
 
-        self.opt = optim.Adam(self.backbone.parameters(), lr=self._curr_lr)
+        self.opt = optim.SGD(self.backbone.parameters(), lr=self._curr_lr)
         self.log(f'initialised backbone parameters & optimizer')
 
     def _get_verb_action(self, action_id: int) -> str:
 
         if action_id == self.action_space_dim:
             return "STOP signal"
-        if action_id == self.action_space_dim - 1:
-            return "RE-INIT signal"
-
-        # lr and rewind steps
-        if action_id < 5:
-            return f"decrease lr by 10% && rewind by {action_id}"
-        elif 5 <= action_id < 10:
-            rewind_steps = action_id - 5
-            return f"keep current lr && rewind by {rewind_steps}"
-        else:
-            rewind_steps = action_id - 10
-            return f"increase lr by 10% && rewind by {rewind_steps}"
+        elif action_id == self.action_space_dim - 1:
+            return "RE-INIT signal & keep lr constant"
+        elif action_id == 0:
+            return 'keep lr constant'
+        elif action_id == 1:
+            return 'decrease lr by 20%'
+        elif action_id == 2:
+            return 'decrease lr by 80%'
+        elif action_id == 3:
+            return 'increase lr by 20%'
+        elif action_id == 4:
+            return 'increase lr by 80%'
 
     def _append_log(self, loss_vec: np.array, phival: float, action_vrb: str, reward: float):
 
