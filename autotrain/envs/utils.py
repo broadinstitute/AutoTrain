@@ -7,18 +7,37 @@ import torch.utils.data as torchdata
 import numpy as np
 
 from functools import partial
+from pathlib import Path
+import pickle as pkl
+
+
+def pkl_save(o: object, p: Path):
+    if p.exists(): print(f'[pkl_save] path [{p}] exists; overwriting')
+
+    with open(p, 'wb') as fp:
+        pkl.dump(o, fp)
+
+
+def pkl_load(p: Path):
+
+    with open(p, 'rb') as fp:
+        return pkl.load(fp)
+
 
 INIT_METHODS = [nn.init.xavier_uniform_, nn.init.xavier_normal_, \
                 nn.init.kaiming_uniform_, nn.init.kaiming_normal_]
+
 
 def init_weights(m, init=nn.init.xavier_uniform):
     if type(m) == nn.Linear:
         init(m.weight)
         m.bias.data.fill_(0.01)
-        
-def init_params(model): # TODO
+
+
+def init_params(model):  #  TODO
     func = np.random.choice(INIT_METHODS)
     model.apply(partial(init_weights, init=func))
+
 
 def create_dls(trnds, valds, bs=16, num_workers=4):
     trndl = torchdata.DataLoader(trnds, batch_size=bs, shuffle=True, num_workers=num_workers)
@@ -41,6 +60,7 @@ def create_dss(data, data_split, dist):
     valds = SimpleDataset(*val)
 
     return trnds, valds
+
 
 def splitds(X, Y, data_split):
     splitidx = int(len(X) * data_split)
@@ -66,5 +86,5 @@ class SimpleDataset(torchdata.Dataset):
 
         if self.tfms:
             x = self.tfms(x)
-        
+
         return x, y
