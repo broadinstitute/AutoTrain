@@ -13,6 +13,7 @@ import torch.utils.data as  torchdata
 
 import pandas as pd
 import numpy as np
+from PIL import Image
 
 from pathlib import Path
 from functools import partial
@@ -20,17 +21,13 @@ import pickle as pkl
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+import io
+
 """
 TODO:
     - ATE
-        - step mechanics
-            - observation
-                - each channel for image
-        
-    -Clf
-        - scaling the batch size
-            - custom data loaders
-
+        - logging data; telemetry
+    
 
 """
 
@@ -40,28 +37,31 @@ Clf = namedtuple('Clf', ['history', 'result'])
 class ClfEngine:
     def __init__(self, model, trnds, valds, phi: callable,
                  criterion: callable = nn.CrossEntropyLoss(), opt: callable = optim.SGD,
-                 lr_init=3e-4, bs_init=16, dev=None, v=False):
+                 lr_init=3e-4, bs_init=16, max_lr=3, dev=None, v=False):
 
         self.history = [[], [], []]  # loss, lr, bs
 
         self.dev = dev
         self.v = v
 
+        # need to set max bs and max lr
         self.lr_init = self._curr_lr = lr_init
         self.bs_init = self._curr_bs = bs_init
-
-        self.model = model
-        self.opt_cls = opt
-        self.opt = self.opt_cls(self.model.parameters(), lr=self._curr_lr)
-        self.criterion = criterion
 
         # DATA
 
         self.trnds = trnds
         self.valds = valds
 
-        self.trndl, self.valdl = utils.create_dls(self.trnds, self.valds)
-        # set bs to self._curr_bs
+        self.trndl, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
+
+        self._max_bs = len(trnds) / 10
+        self._max_lr = max_lr
+
+        self.model = model
+        self.opt_cls = opt
+        self.opt = self.opt_cls(self.model.parameters(), lr=self._curr_lr)
+        self.criterion = criterion
 
         # Thresholdout & statistic of interest
         self.thresholdout = Thresholdout(self.trndl, self.valdl)
@@ -73,9 +73,9 @@ class ClfEngine:
     # MAIN API
 
     def reinit(self):
-        # clear history
         self.init_model()
-        pass
+        self.history = [[], [], []]
+        self.log("re-init complete")
 
     def init_model(self):
 
@@ -87,22 +87,29 @@ class ClfEngine:
         self.opt = self.opt_cls(self.model.parameters(), lr=self._curr_lr)
 
     def scale_bs(self, scale_factor):
-        # TODO
-        pass
+        # originally wanted to do custom data loaders so that data wouldn't repeat
+        # but as num. updates << len. dataset we  will just get by with  reinitialising
+        self._curr_bs = min(self._max_bs, int(self._curr_bs * scale_factor))
+        self.trndl, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
+
+        self.log(f"scaled BS by [{scale_factor}]; BS=[{self._curr_bs}]")
 
     def scale_lr(self, scale_factor):
 
-        for g in self.opt.param_groups:
-            g['lr'] *= scale_factor
+        new_lr = min(self._max_lr, self._curr_lr * scale_factor)
+        self.log(f"scaled LR by [{scale_factor}]; LR=[{self._curr_lr}]")
 
-        self._curr_lr *= scale_factor
+        for g in self.opt.param_groups:
+            g['lr'] = new_lr
+
+        self._curr_lr = new_lr
 
     def do_updates(self, N: int):
         # data should not repeat
-
-        step = 0
+        self.log(f'training loop: started for [{N}] updates; BS=[{self._curr_bs}] LR=[{self._curr_lr}]!')
 
         self.model.train()
+
         for i, batch in enumerate(self.trndl):
             inputs, labels = batch[0], batch[1]
 
@@ -117,12 +124,14 @@ class ClfEngine:
             loss.backward()
 
             self.opt.step()
-            step += 1
+            N -= 1
 
-            if step >= N:
-                self.log('training loop done!')
+            if N <= 0:
+                self.log('training loop: done!')
                 self._append_history(loss.item())
                 return
+
+        self.do_updates(N)
 
     # HELPER
     def save(self, p: Path):
@@ -183,7 +192,8 @@ class AutoTrainEnvironment(gym.Env):
         self.reward_range = None
         self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
                                        dtype=np.float32)
-        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(3, 128, 128),
+        # 6 channels for loss, lr, bs for baseline and competitor
+        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(6, 128, 128),
                                             dtype=np.float32)  # TODO image low high
 
         # experiment parameter setup
@@ -237,10 +247,9 @@ class AutoTrainEnvironment(gym.Env):
         with (savedir / 'env_params.pkl').open('wb') as fp:
             pkl.dump(self.get_env_params(), fp)
 
-    def seed(self, seed=None):
-        torch.seed
-        np.random.seed
-        pass
+    def seed(self, seed=2020):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
 
     def step(self, action: np.ndarray):
         """
@@ -280,19 +289,46 @@ class AutoTrainEnvironment(gym.Env):
 
         return self._make_o(), step_reward, False, {}
 
+    def _make_plot(self, data, color='b', ax=None):
+        x = range(len(data))
+        ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
+        ax.set_xlim(self.T * self.horizon)  #  possibly need to plt.close(fg)
+        return ax
+
+    def _plot_to_vec(self, fig):
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png')
+        buf.seek(0)
+        im = Image.open(buf).convert("L")
+        im.thumbnail(self.observation_space.shape[1:], Image.ANTIALIAS)
+        return np.asarray(im)
+
     def _make_o(self) -> np.array:
         # plotting: set xlim with horizon
 
         # convey motion?
+        #  use each channel to convey different thing like, channel 0 for competitor loss
         # the agent should be able to reason from a stationary plot
 
         # use those two up to a time step
+        plt.axis('off')
 
-        self._competitor.history
-        self._baseline.history
-        #  use each channel to convey different thing like, channel 0 for competitor loss
+        O = np.zeros(self.observation_space.shape)
+        d = 0
 
-        pass
+        for player in [self._baseline, self._competitor]:
+            for i in range(3):
+                data = player.history[i]
+                if data:
+                    fg = self._make_plot(data)
+                    vec = self._plot_to_vec(fg)
+                else:
+                    vec = 0
+
+                O[d, ...] = vec
+                d += 1
+
+        return O
 
     def _compute_final_reward(self) -> float:
 
@@ -303,19 +339,59 @@ class AutoTrainEnvironment(gym.Env):
         if self._baseline.result > competitor.result:
             r *= -1
 
-        r += -self.update_penalty * len(competitor.history)
+        r -= self.update_penalty * len(competitor.history)
 
         return r
 
     def _compute_step_reward(self) -> float:
         return -self.step_reward
 
+    def set_baseline(self, baseline: Clf):
+        self._baseline = baseline
+
     def reset(self):
-        pass
+        # set baseline
+        self._competitor.reinit()
+        return self.init(baseline=self._baseline, competitor=self._competitor, savedir=self.savedir,
+                         T=self.T, horizon=self.horizon, step_reward=self.step_reward,
+                         terminal_reward=self.terminal_reward, update_penalty=self.update_penalty,
+                         num_workers=self.num_workers, v=self.v, device=self.device)
 
     def render(self, mode='human', close=False):
-        # TODO
-        pass
+
+        fg, axes = plt.subplot(2, 3)
+
+        self._make_plot(self._competitor.history[0], ax=axes[0, 0])
+        axes[0, 0].set_title('Competitor: Loss')
+        axes[0, 0].set_xlabel('Batch Updates')
+        axes[0, 0].set_ylabel('Loss')
+
+        self._make_plot(self._competitor.history[1], color='g', ax=axes[0, 1])
+        axes[0, 1].set_title('Competitor: LR')
+        axes[0, 1].set_xlabel('Batch Updates')
+        axes[0, 1].set_ylabel('LR')
+
+        self._make_plot(self._competitor.history[2], color='r', ax=axes[0, 2])
+        axes[0, 2].set_title('Competitor: BS')
+        axes[0, 2].set_xlabel('Batch Updates')
+        axes[0, 2].set_ylabel('BS')
+
+        self._make_plot(self._baseline.history[0], ax=axes[1, 0])
+        axes[1, 0].set_title('Baseline: Loss')
+        axes[1, 0].set_xlabel('Batch Updates')
+        axes[1, 0].set_ylabel('Loss')
+
+        self._make_plot(self._baseline.history[1], color='g', ax=axes[1, 1])
+        axes[1, 1].set_title('Baseline: LR')
+        axes[1, 1].set_xlabel('Batch Updates')
+        axes[1, 1].set_ylabel('LR')
+
+        self._make_plot(self._baseline.history[2], color='r', ax=axes[1, 2])
+        axes[1, 2].set_title('Baseline: BS')
+        axes[1, 2].set_xlabel('Batch Updates')
+        axes[1, 2].set_ylabel('BS')
+
+        return fg
 
     def plot_loss(self):
         history = np.concatenate(list(self.logloss.values()), axis=0)
