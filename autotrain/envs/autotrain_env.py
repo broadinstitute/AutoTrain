@@ -40,6 +40,7 @@ class ClfEngine:
                  lr_init=3e-4, bs_init=16, max_lr=3, dev=None, v=False):
 
         self.history = [[], [], []]  # loss, lr, bs
+        self.optim_step = 0  # num batch updates
 
         self.dev = dev
         self.v = v
@@ -68,13 +69,12 @@ class ClfEngine:
         self.phi = phi
         self._phi_func = partial(self.phi, model=self.model)  #   does partial work on this
 
-        self.glob_step = 0
-
     # MAIN API
 
     def reinit(self):
         self.init_model()
         self.history = [[], [], []]
+        self.optim_step = 0
         self.log("re-init complete")
 
     def init_model(self):
@@ -105,7 +105,6 @@ class ClfEngine:
         self._curr_lr = new_lr
 
     def do_updates(self, N: int):
-        # data should not repeat
         self.log(f'training loop: started for [{N}] updates; BS=[{self._curr_bs}] LR=[{self._curr_lr}]!')
 
         self.model.train()
@@ -129,6 +128,7 @@ class ClfEngine:
             if N <= 0:
                 self.log('training loop: done!')
                 self._append_history(loss.item())
+                self.optim_step += N
                 return
 
         self.do_updates(N)
@@ -157,7 +157,7 @@ class ClfEngine:
         return Clf(h, result)
 
     def log(self, s):
-        if self.v: print('[clf_enigine] ', s)
+        if self.v: print('[clf_engine] ', s)
 
 
 class AutoTrainEnvironment(gym.Env):
@@ -166,27 +166,8 @@ class AutoTrainEnvironment(gym.Env):
     def __init__(self):
         pass
 
-    def set_baseline(self, history, result):
-        """
-        method to be used when changing the baseline model/performance
-        critical for slef play and final reward fomulation
-        history:
-            - Nx3 sized matrix where N is the number of batch updates
-                - 0th dim is loss
-                - 1th dim is lr used
-                - 2nd dim is bs used
-            -
-        result:
-            - scalar
-                - phi value
-
-        """
-
-        self._baseline = Clf(history, result)
-
-    # pass in just two Clf and ClfEngine?
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
-             T=30, horizon=50, step_reward=0.1, terminal_reward=10, update_penalty=0.1,
+             U=30, horizon=50, step_reward=0.1, terminal_reward=10, update_penalty=0.1,
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
@@ -198,7 +179,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # experiment parameter setup
 
-        self.T = T  # how many batch updates in one time step
+        self.U = U  # how many batch updates in one time step
         self.horizon = horizon  # time steps i.e. multiple of T
 
         self.step_reward = step_reward
@@ -218,34 +199,29 @@ class AutoTrainEnvironment(gym.Env):
 
         # data collection
 
-        self.logmdp = pd.DataFrame(columns=['t', 'phi', 'reward', 'action', 'clf. optim. steps', 'lr'])  #  length of ll
-
-        self.logloss = dict()  # array of loss vectors; idx is timestep
+        self.logmdp = pd.DataFrame(
+            columns=['t', 'reward', 'optim. steps', 'lr.scale', 'lr.val', 'bs.scale', 'bs.val',
+                     'p(re-init)', 'p(stop)'])
 
         # self._append_log(self._get_phi_val(), "ENV INIT", 0)
         self.time_step = 0
 
         self.log(f'environment initialised : {self.__repr__()}')
 
-    def _append_log(self, loss_vec: np.array, phival: float, action_vrb: str, reward: float):
+    def log_step(self, reward: float, action: np.array):
+        lr_scale, bs_scale, p_reinit, p_stop = action
+        lr_val, bs_val = self._competitor._curr_lr, self._competitor._curr_bs
+        optim_step = self._competitor.optim_step
 
-        # vrb actions are good, easier to inspect
-
-        self.logmdp.loc[len(self.logmdp)] = [self.time_step, phival, reward, action_vrb, self.ll.len, self._curr_lr]
-
-        self.logloss[self.time_step] = loss_vec
+        self.logmdp.loc[len(self.logmdp)] = [self.time_step, reward, optim_step, lr_scale, lr_val, bs_scale, bs_val,
+                                             p_reinit, p_stop]
 
     def save(self, savedir: Path):
 
         assert savedir.is_dir() and savedir.exists()
 
-        self.logmdp.to_csv(savedir / 'env_mdp_log.csv')
+        self.logmdp.to_csv(savedir / 'mdplog.csv')
 
-        with (savedir / 'env_loss.pkl').open('wb') as fp:
-            pkl.dump(self.logloss, fp)
-
-        with (savedir / 'env_params.pkl').open('wb') as fp:
-            pkl.dump(self.get_env_params(), fp)
 
     def seed(self, seed=2020):
         torch.manual_seed(seed)
@@ -280,7 +256,7 @@ class AutoTrainEnvironment(gym.Env):
         self._competitor.scale_bs(action[0])
         self._competitor.scale_bs(action[1])
 
-        self._competitor.do_updates(self.T)
+        self._competitor.do_updates(self.U)
 
         self.time_step += 1
 
@@ -292,7 +268,7 @@ class AutoTrainEnvironment(gym.Env):
     def _make_plot(self, data, color='b', ax=None):
         x = range(len(data))
         ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
-        ax.set_xlim(self.T * self.horizon)  #  possibly need to plt.close(fg)
+        ax.set_xlim(self.U * self.horizon)  #  possibly need to plt.close(fg)
         return ax
 
     def _plot_to_vec(self, fig):
@@ -350,10 +326,9 @@ class AutoTrainEnvironment(gym.Env):
         self._baseline = baseline
 
     def reset(self):
-        # set baseline
         self._competitor.reinit()
         return self.init(baseline=self._baseline, competitor=self._competitor, savedir=self.savedir,
-                         T=self.T, horizon=self.horizon, step_reward=self.step_reward,
+                         U=self.U, horizon=self.horizon, step_reward=self.step_reward,
                          terminal_reward=self.terminal_reward, update_penalty=self.update_penalty,
                          num_workers=self.num_workers, v=self.v, device=self.device)
 
@@ -393,50 +368,5 @@ class AutoTrainEnvironment(gym.Env):
 
         return fg
 
-    def plot_loss(self):
-        history = np.concatenate(list(self.logloss.values()), axis=0)
-        ax = sns.lineplot(x=range(len(history)), y=history)
-        ax.set(xlabel='batch updates (v. line is step delim.)', ylabel='loss value')
-
-        for i in range(1, len(self.logloss)):
-            plt.axvline(self.K * i, ls='-')
-
-        plt.title('loss plot vs batch update')
-
-    def plot_mdp(self, figsize=(7, 7)):
-        """plot reward and phi value"""
-        f, axes = plt.subplots(2, 2, figsize=figsize, sharex=True)
-        sns.despine(left=True)
-        # 'phi', 'reward', 'action', 'weights history'
-
-        sns.lineplot(data=self.logmdp, x='t', y='phi', ax=axes[0, 0])
-        axes[0, 0].set_title('phi val')
-
-        sns.lineplot(data=self.logmdp, x='t', y='reward', ax=axes[0, 1])
-        axes[0, 1].set_title('reward')
-
-        cum_reward_mdp = self.logmdp.cumsum(axis='reward')
-
-        sns.lineplot(data=cum_reward_mdp, x='t', y='reward', ax=axes[1, 0])
-        axes[1, 0].set_title('cumulative reward')
-
-        sns.lineplot(data=self.logmdp, x='t', y='weights history', ax=axes[1, 1])
-        axes[1, 1].set_title('weights history')
-
-    def __repr__(self):
-        return f"""AutoTrainEnvironment with the following parameters:
-                        lr_init={self.lr_init}, inter_reward={self._inter_reward}, 
-                        H={self.H}, K={self.K}, T={self.T}"""
-
     def log(self, s):
-        if self.v: print(f'[time_step:{self.time_step}] ', s)
-
-    def get_env_params(self) -> dict:
-        return {
-            'K': self.K,
-            'T': self.T,
-            'H': self.H,
-            'sampling_interval': self.sampling_interval,
-            'save_dir': str(self.savedir),
-            'inter_reward': self._inter_reward,
-        }
+        if self.v: print(f'[ATE:{self.time_step}] ', s)
