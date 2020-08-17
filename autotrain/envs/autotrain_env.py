@@ -22,25 +22,18 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 import io
-
-"""
-TODO:
-    - ATE
-        - when stop; convert competitor to Clf and return from step
-    
-
-"""
+from tqdm.notebook import tqdm
 
 Clf = namedtuple('Clf', ['history', 'result'])
 
 
-
 class ClfEngine:
-    def __init__(self, model, trnds, valds, phi: callable,
+    def __init__(self, model: nn.Module, trnds: torchdata.Dataset, valds: torchdata.Dataset, phi: callable,
                  criterion: callable = nn.CrossEntropyLoss(), opt: callable = optim.SGD,
                  lr_init=3e-4, bs_init=16, max_lr=3, dev=None, v=False):
 
         self.history = [[], [], []]  # loss, lr, bs
+        self.result = []
         self.optim_step = 0  # num batch updates
 
         self.dev = dev
@@ -91,7 +84,7 @@ class ClfEngine:
         # originally wanted to do custom data loaders so that data wouldn't repeat
         # but as num. updates << len. dataset we  will just get by with  reinitialising
         self._curr_bs = min(self._max_bs, int(self._curr_bs * scale_factor))
-        self.trndl, _,  self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
+        self.trndl, _, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
 
         self.log(f"scaled BS by [{scale_factor}]; BS=[{self._curr_bs}]")
 
@@ -105,12 +98,21 @@ class ClfEngine:
 
         self._curr_lr = new_lr
 
-    def do_updates(self, N: int, printi=500):
+    def do_updates(self, N: int):
+
+        if not N:
+            self.log('training loop: done!')
+            self.optim_step = len(self.history[0])
+            return
+
         self.log(f'training loop: started for [{N}] updates; BS=[{self._curr_bs}] LR=[{self._curr_lr}]!')
 
         self.model.train()
 
-        for i, batch in tqdm(enumerate(self.trndl),total=len(self.trndl)):
+        for i, batch in tqdm(enumerate(self.trndl), total=len(self.trndl)):
+            if N <= 0:  # to exhaust the data-loader; otherwise causes child process errors
+                continue
+
             inputs, labels = batch[0], batch[1]
 
             if self.dev:
@@ -120,18 +122,13 @@ class ClfEngine:
 
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
-            
+
             loss.backward()
             self.opt.step()
-            
-            self._append_history(loss.item())
-            
-            N -= 1
 
-            if N <= 0:
-                self.log('training loop: done!')
-                self.optim_step += N
-                return
+            self._append_history(loss.item())
+
+            N -= 1
 
         self.do_updates(N)
 
@@ -147,15 +144,12 @@ class ClfEngine:
         self.history[1] += [self._curr_lr]
         self.history[2] += [self._curr_bs]
 
-    def _get_phi(self):
-        self.log('initialised phi value: started ...')
-        phi_val = self.thresholdout.verify(self._phi_func)
-        self.log('initialised phi value: done')
-        return phi_val
+    def test(self) -> float:
+        return self.thresholdout.verify(self._phi_func)
 
-    def toclf(self) -> Clf:
+    def clf(self) -> Clf:
         h = np.array(self.history)
-        result = self.thresholdout.verify(self._phi_func)
+        result = np.array(self.result)
         return Clf(h, result)
 
     def log(self, s):
@@ -169,14 +163,15 @@ class AutoTrainEnvironment(gym.Env):
         pass
 
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
-             U=30, horizon=50, step_reward=0.1, terminal_reward=10, update_penalty=0.1,
+             U: int = 30, horizon: int = 50, step_reward: float = 0.1, terminal_reward: float = 10,
+             update_penalty: float = 0.1, test_interval: int = 10,
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
         self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
                                        dtype=np.float32)
-        # 6 channels for loss, lr, bs for baseline and competitor
-        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(6, 128, 128),
+        # 7 channels:  loss, lr, bs for competitor and baseline + one for results monitoring
+        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, 128, 128),
                                             dtype=np.float32)  # TODO image low high
 
         # experiment parameter setup
@@ -187,6 +182,8 @@ class AutoTrainEnvironment(gym.Env):
         self.step_reward = step_reward
         self.terminal_reward = terminal_reward
         self.update_penalty = update_penalty
+
+        self.test_interval = test_interval  # how often to evaluate the performance of the competitor
 
         self.v = v  # is verbose
         self.device = device
@@ -205,7 +202,6 @@ class AutoTrainEnvironment(gym.Env):
             columns=['t', 'reward', 'optim. steps', 'lr.scale', 'lr.val', 'bs.scale', 'bs.val',
                      'p(re-init)', 'p(stop)'])
 
-        # self._append_log(self._get_phi_val(), "ENV INIT", 0)
         self.time_step = 0
 
         self.log(f'environment initialised : {self.__repr__()}')
@@ -224,10 +220,20 @@ class AutoTrainEnvironment(gym.Env):
 
         self.logmdp.to_csv(savedir / 'mdplog.csv')
 
-
-    def seed(self, seed=2020):
+    @staticmethod
+    def seed(seed=2020):
         torch.manual_seed(seed)
         np.random.seed(seed)
+
+    @staticmethod
+    def set_config(size=(9, 9)):
+        sns.set(rc={'figure.figsize': size,
+                    'axes.facecolor': 'black',
+                    'figure.facecolor': 'black'})
+
+    @staticmethod
+    def reset_config():
+        sns.axes_style("darkgrid")
 
     def step(self, action: np.ndarray):
         """
@@ -249,7 +255,7 @@ class AutoTrainEnvironment(gym.Env):
         if is_stop or self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
             self.log(f'received STOP signal (or exceeded horizon), final reward is: [{final_reward}]')
-            return None, final_reward, True, {}
+            return None, final_reward, True, self._competitor.clf()
 
         if is_reinit:
             self._competitor.reinit()
@@ -261,11 +267,14 @@ class AutoTrainEnvironment(gym.Env):
         self._competitor.do_updates(self.U)
 
         self.time_step += 1
+        if self.time_step % self.test_interval == 0:
+            self._competitor.result += [self._competitor.test()]
 
         step_reward = self._compute_step_reward()
         self.log(f'reward at the end of time step is [{step_reward}]')
 
-        return self._make_o(), step_reward, False, {}
+        O, debug = self._make_o()
+        return O, step_reward, False, dict(plots=debug)
 
     def _make_plot(self, data, color='b', ax=None):
         x = range(len(data))
@@ -288,18 +297,21 @@ class AutoTrainEnvironment(gym.Env):
         # convey motion?
         #  use each channel to convey different thing like, channel 0 for competitor loss
         # the agent should be able to reason from a stationary plot
+        # TODO NOTE: maybe be good to convolute spatial i,j coordinates too?
 
         # use those two up to a time step
         plt.axis('off')
 
         O = np.zeros(self.observation_space.shape)
         d = 0
+        plts = []
 
         for player in [self._baseline, self._competitor]:
             for i in range(3):
                 data = player.history[i]
                 if len(data):
                     ax = self._make_plot(data)
+                    plts += [ax]
                     vec = self._plot_to_vec(ax.figure)
                 else:
                     vec = 0
@@ -307,13 +319,23 @@ class AutoTrainEnvironment(gym.Env):
                 O[d, ...] = vec
                 d += 1
 
-        return O
+        if type(self._baseline.result) == list:
+            target = self._baseline.result
+        else:
+            target = [self._baseline.result] * self.U * self.horizon
+
+        r_ax = self._make_plot(target)
+        r_ax = self._make_plot(self._competitor.result, ax=r_ax)
+        plts += [r_ax]
+        O[-1, ...] = self._plot_to_vec(r_ax.figure)
+
+        return O, plts  #  plts for debug
 
     def _compute_final_reward(self) -> float:
 
         r = self.terminal_reward
 
-        competitor = self._competitor.toclf()
+        competitor = self._competitor.clf()
 
         if self._baseline.result > competitor.result:
             r *= -1
