@@ -171,7 +171,7 @@ class AutoTrainEnvironment(gym.Env):
         self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
                                        dtype=np.float32)
         # 7 channels:  loss, lr, bs for competitor and baseline + one for results monitoring
-        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, 128, 128),
+        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, 500,500),
                                             dtype=np.float32)  # TODO image low high
 
         # experiment parameter setup
@@ -277,19 +277,20 @@ class AutoTrainEnvironment(gym.Env):
         return O, step_reward, False, dict(plots=debug)
 
     def _make_plot(self, data, color='b', ax=None):
+        
         x = range(len(data))
         ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
-        ax.set_xlim(self.U * self.horizon)  #  possibly need to plt.close(fg)
+        ax.set_xlim(0, self.U * self.horizon)  #  possibly need to plt.close(fg)
         return ax
 
     def _plot_to_vec(self, fig):
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
+        plt.close(fig)
         buf.seek(0)
         im = Image.open(buf).convert("L")
         im.thumbnail(self.observation_space.shape[1:], Image.ANTIALIAS)
-        print(im.size)
-        return np.asarray(im)
+        return np.asarray(im), im
 
     def _make_o(self) -> np.array:
         # plotting: set xlim with horizon
@@ -309,25 +310,24 @@ class AutoTrainEnvironment(gym.Env):
         for player in [self._baseline, self._competitor]:
             for i in range(3):
                 data = player.history[i]
+                
                 if len(data):
                     ax = self._make_plot(data)
-                    plts += [ax]
-                    vec = self._plot_to_vec(ax.figure)
+                    vec, im = self._plot_to_vec(ax.figure)
+                    plts += [im]
                 else:
                     vec = 0
 
                 O[d, ...] = vec
                 d += 1
 
-        if type(self._baseline.result) == list:
-            target = self._baseline.result
-        else:
-            target = [self._baseline.result] * self.U * self.horizon
-
-        r_ax = self._make_plot(target)
+        target = self._baseline.result[-1]
+        
+        r_ax = self._make_plot([target] * (self.U * self.horizon))
         r_ax = self._make_plot(self._competitor.result, ax=r_ax)
-        plts += [r_ax]
-        O[-1, ...] = self._plot_to_vec(r_ax.figure)
+        O[-1, ...], im = self._plot_to_vec(r_ax.figure)
+        
+        plts += [im]
 
         return O, plts  #  plts for debug
 
