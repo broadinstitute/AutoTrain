@@ -26,12 +26,13 @@ import io
 """
 TODO:
     - ATE
-        - logging data; telemetry
+        - when stop; convert competitor to Clf and return from step
     
 
 """
 
 Clf = namedtuple('Clf', ['history', 'result'])
+
 
 
 class ClfEngine:
@@ -54,12 +55,12 @@ class ClfEngine:
         self.trnds = trnds
         self.valds = valds
 
-        self.trndl, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
+        self.trndl, _, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
 
         self._max_bs = len(trnds) / 10
         self._max_lr = max_lr
 
-        self.model = model
+        self.model = model.to(self.dev) if self.dev else model
         self.opt_cls = opt
         self.opt = self.opt_cls(self.model.parameters(), lr=self._curr_lr)
         self.criterion = criterion
@@ -90,7 +91,7 @@ class ClfEngine:
         # originally wanted to do custom data loaders so that data wouldn't repeat
         # but as num. updates << len. dataset we  will just get by with  reinitialising
         self._curr_bs = min(self._max_bs, int(self._curr_bs * scale_factor))
-        self.trndl, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
+        self.trndl, _,  self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
 
         self.log(f"scaled BS by [{scale_factor}]; BS=[{self._curr_bs}]")
 
@@ -104,12 +105,12 @@ class ClfEngine:
 
         self._curr_lr = new_lr
 
-    def do_updates(self, N: int):
+    def do_updates(self, N: int, printi=500):
         self.log(f'training loop: started for [{N}] updates; BS=[{self._curr_bs}] LR=[{self._curr_lr}]!')
 
         self.model.train()
 
-        for i, batch in enumerate(self.trndl):
+        for i, batch in tqdm(enumerate(self.trndl),total=len(self.trndl)):
             inputs, labels = batch[0], batch[1]
 
             if self.dev:
@@ -119,15 +120,16 @@ class ClfEngine:
 
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
-
+            
             loss.backward()
-
             self.opt.step()
+            
+            self._append_history(loss.item())
+            
             N -= 1
 
             if N <= 0:
                 self.log('training loop: done!')
-                self._append_history(loss.item())
                 self.optim_step += N
                 return
 
@@ -241,8 +243,8 @@ class AutoTrainEnvironment(gym.Env):
         self.log(f'action [{action}] recieved')
         assert self.action_space.contains(action), 'invalid action provided'
 
-        is_stop = torch.rand() > action[-1]
-        is_reinit = torch.rand() > action[-2]
+        is_stop = np.random.rand() < action[-1]
+        is_reinit = np.random.rand() < action[-2]
 
         if is_stop or self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
@@ -254,7 +256,7 @@ class AutoTrainEnvironment(gym.Env):
 
         # apply changes
         self._competitor.scale_bs(action[0])
-        self._competitor.scale_bs(action[1])
+        self._competitor.scale_lr(action[1])
 
         self._competitor.do_updates(self.U)
 
@@ -277,6 +279,7 @@ class AutoTrainEnvironment(gym.Env):
         buf.seek(0)
         im = Image.open(buf).convert("L")
         im.thumbnail(self.observation_space.shape[1:], Image.ANTIALIAS)
+        print(im.size)
         return np.asarray(im)
 
     def _make_o(self) -> np.array:
@@ -295,9 +298,9 @@ class AutoTrainEnvironment(gym.Env):
         for player in [self._baseline, self._competitor]:
             for i in range(3):
                 data = player.history[i]
-                if data:
-                    fg = self._make_plot(data)
-                    vec = self._plot_to_vec(fg)
+                if len(data):
+                    ax = self._make_plot(data)
+                    vec = self._plot_to_vec(ax.figure)
                 else:
                     vec = 0
 
@@ -334,7 +337,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def render(self, mode='human', close=False):
 
-        fg, axes = plt.subplot(2, 3)
+        fg, axes = plt.subplots(2, 3)
 
         self._make_plot(self._competitor.history[0], ax=axes[0, 0])
         axes[0, 0].set_title('Competitor: Loss')

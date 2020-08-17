@@ -6,6 +6,7 @@
 data/
 logs/
 weightsH/
+results/
 autotrain-run/
 autotrain-run-*/
 
