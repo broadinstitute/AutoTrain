@@ -278,6 +278,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def _make_plot(self, data, color='b', ax=None):
         plt.axis('off')
+
         x = range(len(data))
         ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
         ax.set_xlim(0, self.U * self.horizon)  #  possibly need to plt.close(fg)
@@ -307,7 +308,7 @@ class AutoTrainEnvironment(gym.Env):
         for player in [self._baseline, self._competitor]:
             for i in range(3):
                 data = player.history[i]
-                
+
                 if len(data):
                     ax = self._make_plot(data)
                     vec, im = self._plot_to_vec(ax.figure)
@@ -319,11 +320,11 @@ class AutoTrainEnvironment(gym.Env):
                 d += 1
 
         target = self._baseline.result[-1]
-        
+
         r_ax = self._make_plot([target] * (self.U * self.horizon))
         r_ax = sns.scatterplot(x=range(len(self._competitor.result)), y=self._competitor.result, ax=r_ax, marker="+")
         O[-1, ...], im = self._plot_to_vec(r_ax.figure)
-        
+
         plts += [im]
 
         return O, plts  #  plts for debug
