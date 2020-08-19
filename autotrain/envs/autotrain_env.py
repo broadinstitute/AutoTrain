@@ -276,20 +276,20 @@ class AutoTrainEnvironment(gym.Env):
         O, debug = self._make_o()
         return O, step_reward, False, dict(plots=debug)
 
-    def _make_plot(self, data, color='b', ax=None):
+    def _make_plot(self, data, color='w', ax=None):
         x = range(len(data))
         ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
-        ax.set_xlim(self.U * self.horizon)  #  possibly need to plt.close(fg)
+        ax.set_xlim(0, self.U * self.horizon)  #  possibly need to plt.close(fg)
         return ax
 
     def _plot_to_vec(self, fig):
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
+        plt.close(fig)
         buf.seek(0)
         im = Image.open(buf).convert("L")
         im.thumbnail(self.observation_space.shape[1:], Image.ANTIALIAS)
-        print(im.size)
-        return np.asarray(im)
+        return np.asarray(im), im
 
     def _make_o(self) -> np.array:
         # plotting: set xlim with horizon
@@ -311,8 +311,8 @@ class AutoTrainEnvironment(gym.Env):
                 data = player.history[i]
                 if len(data):
                     ax = self._make_plot(data)
-                    plts += [ax]
-                    vec = self._plot_to_vec(ax.figure)
+                    vec, im = self._plot_to_vec(ax.figure)
+                    plts += [im]
                 else:
                     vec = 0
 
