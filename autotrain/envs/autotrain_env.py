@@ -164,15 +164,15 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
              U: int = 30, horizon: int = 50, step_reward: float = 0.1, terminal_reward: float = 10,
-             update_penalty: float = 0.1, test_interval: int = 10,
+             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(600,900),
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
         self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
                                        dtype=np.float32)
         # 7 channels:  loss, lr, bs for competitor and baseline + one for results monitoring
-        # TODO exp evidence
-        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, 500, 500),
+
+        self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, *o_dim),
                                             dtype=np.float32)  # TODO image low high
 
         # experiment parameter setup
@@ -303,7 +303,6 @@ class AutoTrainEnvironment(gym.Env):
         # the agent should be able to reason from a stationary plot
         # TODO NOTE: maybe be good to convolute spatial i,j coordinates too?
 
-        # use those two up to a time step
         O = np.zeros(self.observation_space.shape)
         d = 0
         plts = []
@@ -325,7 +324,7 @@ class AutoTrainEnvironment(gym.Env):
         target = self._baseline.result[-1]
 
         r_ax = self._make_plot([target] * (self.U * self.horizon))
-        r_ax = self._make_plot(self._competitor.result, ax=r_ax)
+        r_ax = sns.scatterplot(x=range(len(self._competitor.result)), y=self._competitor.result, ax=r_ax, marker="+")
         O[-1, ...], im = self._plot_to_vec(r_ax.figure)
 
         plts += [im]
