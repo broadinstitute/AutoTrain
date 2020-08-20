@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import io
 from tqdm.notebook import tqdm
 
-Clf = namedtuple('Clf', ['history', 'result'])
+Clf = namedtuple('Clf', ['history', 'result'])  # 3; loss, lr, bs
 
 
 class ClfEngine:
@@ -171,6 +171,7 @@ class AutoTrainEnvironment(gym.Env):
         self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
                                        dtype=np.float32)
         # 7 channels:  loss, lr, bs for competitor and baseline + one for results monitoring
+        # TODO exp evidence
         self.observation_space = spaces.Box(low=-float('inf'), high=float('inf'), shape=(7, 500, 500),
                                             dtype=np.float32)  # TODO image low high
 
@@ -249,7 +250,7 @@ class AutoTrainEnvironment(gym.Env):
         self.log(f'action [{action}] recieved')
         assert self.action_space.contains(action), 'invalid action provided'
 
-        is_stop = np.random.rand() < action[-1]
+        is_stop = np.random.rand() < action[-1] # TODO: thresholding exp.
         is_reinit = np.random.rand() < action[-2]
 
         if is_stop or self.time_step + 1 >= self.horizon:
@@ -277,10 +278,12 @@ class AutoTrainEnvironment(gym.Env):
         return O, step_reward, False, dict(plots=debug)
 
     def _make_plot(self, data, color='b', ax=None):
-
+        plt.axis('off')
         x = range(len(data))
         ax = sns.lineplot(y=data, x=x, color=color, ax=ax)
         ax.set_xlim(0, self.U * self.horizon)  #  possibly need to plt.close(fg)
+
+        # ax.set_ylim(0, self._competitor._max_lr)
         return ax
 
     def _plot_to_vec(self, fig):
@@ -301,8 +304,6 @@ class AutoTrainEnvironment(gym.Env):
         # TODO NOTE: maybe be good to convolute spatial i,j coordinates too?
 
         # use those two up to a time step
-        plt.axis('off')
-
         O = np.zeros(self.observation_space.shape)
         d = 0
         plts = []
@@ -345,6 +346,7 @@ class AutoTrainEnvironment(gym.Env):
         return r
 
     def _compute_step_reward(self) -> float:
+        # TODO prop to delta loss between baseline vs competitor
         return -self.step_reward
 
     def set_baseline(self, baseline: Clf):
