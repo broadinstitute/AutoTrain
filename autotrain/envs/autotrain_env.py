@@ -26,6 +26,12 @@ from tqdm.notebook import tqdm
 
 Clf = namedtuple('Clf', ['history', 'result'])  # 3; loss, lr, bs
 
+"""
+missing two things:
+ - return observation at the init
+ - don't have to make baseline everytime
+"""
+
 
 class ClfEngine:
     def __init__(self, model: nn.Module, trnds: torchdata.Dataset, valds: torchdata.Dataset, phi: callable,
@@ -164,7 +170,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
              U: int = 30, horizon: int = 50, step_reward: float = 0.1, terminal_reward: float = 10,
-             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(600,900),
+             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(600, 900),
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
@@ -194,18 +200,25 @@ class AutoTrainEnvironment(gym.Env):
 
         # clf and baseline packaging
 
-        self._baseline = baseline
+        self.set_baseline(baseline)
         self._competitor = competitor
 
         # data collection
 
         self.logmdp = pd.DataFrame(
-            columns=['t', 'reward', 'optim. steps', 'lr.scale', 'lr.val', 'bs.scale', 'bs.val',
+            columns=['t', 'reward', 'optim. steps',
+                     'lr.scale', 'lr.val',
+                     'bs.scale', 'bs.val',
                      'p(re-init)', 'p(stop)'])
 
         self.time_step = 0
 
         self.log(f'environment initialised : {self.__repr__()}')
+
+        self.__O = np.zeros(self.observation_space.shape)
+        self.loss_ylim = (0, 10)  #  for standartized plots
+
+        return self._make_o()
 
     def log_step(self, reward: float, action: np.array):
         lr_scale, bs_scale, p_reinit, p_stop = action
@@ -250,7 +263,7 @@ class AutoTrainEnvironment(gym.Env):
         self.log(f'action [{action}] recieved')
         assert self.action_space.contains(action), 'invalid action provided'
 
-        is_stop = np.random.rand() < action[-1] # TODO: thresholding exp.
+        is_stop = np.random.rand() < action[-1]  #  TODO: thresholding exp.
         is_reinit = np.random.rand() < action[-2]
 
         if is_stop or self.time_step + 1 >= self.horizon:
@@ -266,8 +279,8 @@ class AutoTrainEnvironment(gym.Env):
         self._competitor.scale_lr(action[1])
 
         self._competitor.do_updates(self.U)
-
         self.time_step += 1
+
         if self.time_step % self.test_interval == 0:
             self._competitor.result += [self._competitor.test()]
 
@@ -276,6 +289,23 @@ class AutoTrainEnvironment(gym.Env):
 
         O, debug = self._make_o()
         return O, step_reward, False, dict(plots=debug)
+
+    def set_baseline(self, baseline: Clf):
+        self._baseline = baseline
+        loss, lr, bs = [self._make_plot(data) if len(data) else 0 for data in self._baseline.history]
+
+        for i in range(3):
+            data = [i]
+
+            if len(data):
+                ax = self._make_plot(data)
+                if i == 0:  #  loss
+                    self.loss_ylim = ax.get_ylim()
+                vec, im = self._plot_to_vec(ax.figure)
+            else:
+                vec = 0
+
+            self.__O[i, ...] = vec
 
     def _make_plot(self, data, color='b', ax=None):
         plt.axis('off')
@@ -303,23 +333,23 @@ class AutoTrainEnvironment(gym.Env):
         # the agent should be able to reason from a stationary plot
         # TODO NOTE: maybe be good to convolute spatial i,j coordinates too?
 
-        O = np.zeros(self.observation_space.shape)
-        d = 0
+        O = self.__O.copy()
+        d = 3
         plts = []
 
-        for player in [self._baseline, self._competitor]:
-            for i in range(3):
-                data = player.history[i]
+        for i in range(3):
+            data = self._competitor.history[i]
 
-                if len(data):
-                    ax = self._make_plot(data)
-                    vec, im = self._plot_to_vec(ax.figure)
-                    plts += [im]
-                else:
-                    vec = 0
+            if len(data):
+                ax = self._make_plot(data)
+                if i == 0:
+                    ax.set_ylim(self.loss_ylim)
+                vec, im = self._plot_to_vec(ax.figure)
+                plts += [im]
+            else:
+                vec = 0
 
-                O[d, ...] = vec
-                d += 1
+            O[d + i, ...] = vec
 
         target = self._baseline.result[-1]
 
@@ -347,9 +377,6 @@ class AutoTrainEnvironment(gym.Env):
     def _compute_step_reward(self) -> float:
         # TODO prop to delta loss between baseline vs competitor
         return -self.step_reward
-
-    def set_baseline(self, baseline: Clf):
-        self._baseline = baseline
 
     def reset(self):
         self._competitor.reinit()
