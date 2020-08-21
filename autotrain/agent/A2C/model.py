@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from math import ceil
 
 EPS = 0.003
 
@@ -14,8 +15,8 @@ def fanin_init(size, fanin=None):
 
 def compute_conv_output(w, h, nl, S=1, F=5, P=0):
     for _ in range(nl):
-        w = (w - F + 2 * P) / (S + 1)
-        h = (w - F + 2 * P) / (S + 1)
+        w = ceil((w - F + 2 * P) / (S + 1))
+        h = ceil((h - F + 2 * P) / (S + 1))
     return w, h
 
 
@@ -24,6 +25,7 @@ class ConvNet(nn.Module):  # needs to be
         # 7, 256, 256
         super(ConvNet, self).__init__()
         nc, width, height = input_shape
+        print(input_shape, nc, width, height)
         nw, nh = compute_conv_output(width, height, 3)
 
         self.fc_dim = 8 * nw * nh
@@ -41,7 +43,7 @@ class ConvNet(nn.Module):  # needs to be
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = self.pool(F.relu(self.conv3(x)))
-
+        print(x.shape)
         x = x.view(-1, self.fc_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
@@ -76,7 +78,6 @@ class Critic(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.ReLU(),
         )
 
         self.value_net[-1].weight.data.uniform_(-EPS, EPS)
@@ -130,7 +131,7 @@ class Actor(nn.Module):
         """
         x = self.state_net(state)
         action = F.tanh(self.fc(x))
-
+        print(action, self.action_lim, action.is_cuda, self.action_lim.is_cuda)
         action = action * self.action_lim
 
         return action

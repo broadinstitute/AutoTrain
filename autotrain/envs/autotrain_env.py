@@ -170,7 +170,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
              U: int = 30, horizon: int = 50, step_reward: float = 0.1, terminal_reward: float = 10,
-             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(600, 900),
+             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(256, 256),
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
@@ -199,6 +199,7 @@ class AutoTrainEnvironment(gym.Env):
         self.savedir = savedir
 
         # clf and baseline packaging
+        self._O = np.zeros(self.observation_space.shape)
 
         self.set_baseline(baseline)
         self._competitor = competitor
@@ -215,7 +216,6 @@ class AutoTrainEnvironment(gym.Env):
 
         self.log(f'environment initialised : {self.__repr__()}')
 
-        self.__O = np.zeros(self.observation_space.shape)
         self.loss_ylim = (0, 10)  #  for standartized plots
 
         return self._make_o()
@@ -292,10 +292,9 @@ class AutoTrainEnvironment(gym.Env):
 
     def set_baseline(self, baseline: Clf):
         self._baseline = baseline
-        loss, lr, bs = [self._make_plot(data) if len(data) else 0 for data in self._baseline.history]
 
         for i in range(3):
-            data = [i]
+            data = self._baseline.history[i]
 
             if len(data):
                 ax = self._make_plot(data)
@@ -305,8 +304,8 @@ class AutoTrainEnvironment(gym.Env):
             else:
                 vec = 0
 
-            self.__O[i, ...] = vec
-
+            self._O[i, ...] = vec
+            
     def _make_plot(self, data, color='b', ax=None):
         plt.axis('off')
         x = range(len(data))
@@ -333,7 +332,7 @@ class AutoTrainEnvironment(gym.Env):
         # the agent should be able to reason from a stationary plot
         # TODO NOTE: maybe be good to convolute spatial i,j coordinates too?
 
-        O = self.__O.copy()
+        O = self._O.copy()
         d = 3
         plts = []
 

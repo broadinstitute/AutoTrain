@@ -1,6 +1,7 @@
 import numpy as np
 import random
 from collections import deque
+import pickle as pkl
 
 
 class MemoryBuffer:
@@ -29,6 +30,11 @@ class MemoryBuffer:
 
 	def len(self):
 		return self.len
+    
+	def save(self, path):
+		if path.exists(): print(f'[mem] path {path.name} exists; overwriting')
+		with open(path, 'wb') as fp:
+			pkl.dump(self, fp)
 
 	def add(self, s, a, r, s1):
 		"""

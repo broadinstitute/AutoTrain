@@ -15,8 +15,8 @@ TAU = 0.001
 
 class Trainer:
 
-    def __init__(self, state_shape: np.array, action_dim: int, action_lim: np.array, ram, savedir: Path, bs=32,
-                 lr=3e-4):
+    def __init__(self, state_shape: np.array, action_dim: int, action_lim: np.array, ram, bs=32,
+                 lr=3e-4,dev=None):
         """
         :param state_dim: Dimensions of state (int)
         :param action_dim: Dimension of action (int)
@@ -26,7 +26,7 @@ class Trainer:
         """
         self.state_shape = state_shape
         self.action_dim = action_dim
-        self.action_lim = torch.from_numpy(action_lim)
+        self.action_lim = torch.FloatTensor(action_lim)
 
         self.ram = ram
         self.iter = 0
@@ -34,16 +34,27 @@ class Trainer:
 
         self.bs = bs
         self.lr = lr
-        self.savedir = savedir
+        self.dev = dev
 
         self.actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
         self.target_actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), self.lr)
 
         self.critic = model.Critic(self.state_shape, self.action_dim)
         self.target_critic = model.Critic(self.state_shape, self.action_dim)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), self.lr)
+        
+        if self.dev:
+            self.actor.to(self.dev)
+            self.target_actor.to(self.dev)
 
+            self.critic.to(self.dev)
+            self.target_critic.to(self.dev)
+            
+            self.action_lim.to(self.dev)
+            
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), self.lr)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), self.lr)
+        
+        
         utils.hard_update(self.target_actor, self.actor)
         utils.hard_update(self.target_critic, self.critic)
 
@@ -53,7 +64,10 @@ class Trainer:
         :param state: state (Numpy array)
         :return: sampled action (Numpy array)
         """
-        state = Variable(torch.from_numpy(state))
+        shape = state.shape
+        state = torch.DoubleTensor(state).view(1, *shape)
+        state = Variable(state).to(self.dev) if self.dev else Variable(state)
+
         action = self.target_actor.forward(state).detach()
         return action.data.numpy()
 
@@ -63,7 +77,10 @@ class Trainer:
         :param state: state (Numpy array)
         :return: sampled action (Numpy array)
         """
-        state = Variable(torch.from_numpy(state))
+        shape = state.shape
+        state = torch.DoubleTensor(state).view(1, *shape)
+        state = Variable(state).to(self.dev) if self.dev else Variable(state)
+
         action = self.actor.forward(state).detach()
         new_action = action.data.numpy() + (self.noise.sample() * self.action_lim)
         return new_action
@@ -109,22 +126,22 @@ class Trainer:
     # 		' Loss_critic :- ', loss_critic.data.numpy()
     # self.iter += 1
 
-    def save_models(self, episode_count):
+    def save(self, savedir):
         """
         saves the target actor and critic models
         :param episode_count: the count of episodes iterated
         :return:
         """
-        torch.save(self.target_actor.state_dict(), self.savedir / f"{episode_count}_actor.pt")
-        torch.save(self.target_critic.state_dict(), self.savedir / f"{episode_count}_critic.pt")
+        torch.save(self.target_actor.state_dict(), savedir / f"actor.pt")
+        torch.save(self.target_critic.state_dict(), savedir / f"critic.pt")
 
-    def load_models(self, episode):
+    def load(self, savedir):
         """
         loads the target actor and critic models, and copies them onto actor and critic models
         :param episode: the count of episodes iterated (used to find the file name)
         :return:
         """
-        self.actor.load_state_dict(torch.load(self.savedir / f"{episode}_actor.pt"))
-        self.critic.load_state_dict(torch.load(self.savedir / f"{episode}_critic.pt"))
+        self.actor.load_state_dict(torch.load(savedir / f"actor.pt"))
+        self.critic.load_state_dict(torch.load(savedir / f"critic.pt"))
         utils.hard_update(self.target_actor, self.actor)
         utils.hard_update(self.target_critic, self.critic)
