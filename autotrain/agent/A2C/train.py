@@ -145,10 +145,12 @@ class Trainer:
 
             new_observation, reward, done, info = self.env.step(action)
             
-            self.ram.add(observation, action, reward, new_observation)
             
             if done:
+                self.ram.add(observation, action, reward, np.zeros(self.env.observation_space.shape))
                 break
+                
+            self.ram.add(observation, action, reward, new_observation)
 
             new_observation[new_observation == 255] = 0
 
@@ -158,7 +160,6 @@ class Trainer:
             self.optimize()
 
             print(f'[ATA episode {i}]: took [{time.time() - start_time:.1f}] seconds for one full step')
-
 
 
         gc.collect()

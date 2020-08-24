@@ -127,6 +127,6 @@ class Actor(nn.Module):
         :return: Output action (Torch Variable: [n,action_dim] )
         """
         x = self.state_net(state)
-        action = F.tanh(self.fc(x))
+        action = torch.tanh(self.fc(x))
 
         return action

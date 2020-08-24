@@ -368,7 +368,7 @@ class AutoTrainEnvironment(gym.Env):
 
         competitor = self._competitor.clf()
 
-        if self._baseline.result > competitor.result:
+        if self._baseline.result[-1] > competitor.result[-1]:
             r *= -1
 
         r -= self.update_penalty * len(competitor.history)
