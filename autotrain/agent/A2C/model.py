@@ -101,7 +101,7 @@ class Critic(nn.Module):
 
 class Actor(nn.Module):
 
-    def __init__(self, state_shape, action_dim, action_lim):
+    def __init__(self, state_shape, action_dim):
         """
         :param state_shape: Dimension of input state np.array
         :param action_dim: Dimension of output action (int)
@@ -111,9 +111,7 @@ class Actor(nn.Module):
         super(Actor, self).__init__()
 
         self.state_shape = state_shape
-
         self.action_dim = action_dim
-        self.action_lim = action_lim
 
         self.state_net = ConvNet(self.state_shape)
 
@@ -131,7 +129,5 @@ class Actor(nn.Module):
         """
         x = self.state_net(state)
         action = F.tanh(self.fc(x))
-        print(action, self.action_lim, action.is_cuda, self.action_lim.is_cuda)
-        action = action * self.action_lim
 
         return action
