@@ -26,12 +26,6 @@ from tqdm.notebook import tqdm
 
 Clf = namedtuple('Clf', ['history', 'result'])  # 3; loss, lr, bs
 
-"""
-missing two things:
- - return observation at the init
- - don't have to make baseline everytime
-"""
-
 
 class ClfEngine:
     def __init__(self, model: nn.Module, trnds: torchdata.Dataset, valds: torchdata.Dataset, phi: callable,
@@ -305,7 +299,7 @@ class AutoTrainEnvironment(gym.Env):
                 vec = 0
 
             self._O[i, ...] = vec
-            
+
     def _make_plot(self, data, color='b', ax=None):
         plt.axis('off')
         x = range(len(data))
@@ -373,9 +367,20 @@ class AutoTrainEnvironment(gym.Env):
 
         return r
 
-    def _compute_step_reward(self) -> float:
+    def _compute_step_reward(self, window=10, scale=0.1, r_max=0.5, r_min=-0.5) -> float:
         # TODO prop to delta loss between baseline vs competitor
-        return -self.step_reward
+        # incentivize lower loss than the baseline
+
+        ic = self.time_step * self.U
+        ib = min(ic, len(self._baseline.history[0]))
+
+        baseline = np.mean(self._baseline.history[0][ib - window:ib])
+        competitor = np.mean(self._competitor.history[0][ic - window:ic])
+
+        delta = competitor - baseline
+        r = max(min(scale * delta, r_max), r_min)
+
+        return r
 
     def reset(self):
         self._competitor.reinit()
