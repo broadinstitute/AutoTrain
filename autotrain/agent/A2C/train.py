@@ -1,22 +1,30 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
 import numpy as np
-import math
 from pathlib import Path
+
 import autotrain.agent.A2C.utils as utils
 import autotrain.agent.A2C.model as model
+from autotrain.envs.autotrain_env import AutoTrainEnvironment
+
+from itertools import count
+
+import time, gc
 
 GAMMA = 0.99
 TAU = 0.001
 
 
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+
 class Trainer:
 
-    def __init__(self, state_shape: np.array, action_dim: int, action_lim: np.array, ram, bs=32,
-                 lr=3e-4,dev=None):
+    def __init__(self, env: AutoTrainEnvironment, state_shape: np.array, action_dim: int,
+                 action_lim: np.array, ram, savedir: Path, bs=32, lr=3e-4, dev=None):
         """
         :param state_dim: Dimensions of state (int)
         :param action_dim: Dimension of action (int)
@@ -26,37 +34,35 @@ class Trainer:
         """
         self.state_shape = state_shape
         self.action_dim = action_dim
-        self.action_lim = torch.FloatTensor(action_lim)
+        self.action_lim = action_lim  #  numpy; action limiting is to be done by the agent
 
+        self.env = env
         self.ram = ram
         self.iter = 0
         self.noise = utils.OrnsteinUhlenbeckActionNoise(self.action_dim)
 
+        self.savedir = savedir
+
         self.bs = bs
         self.lr = lr
         self.dev = dev
-        
-        if self.dev:
-            self.action_lim = self.action_lim.to(self.dev)
-        
-        self.actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
-        self.target_actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
+
+        self.actor = model.Actor(self.state_shape, self.action_dim)
+        self.target_actor = model.Actor(self.state_shape, self.action_dim)
 
         self.critic = model.Critic(self.state_shape, self.action_dim)
         self.target_critic = model.Critic(self.state_shape, self.action_dim)
-        
+
         if self.dev:
             self.actor.to(self.dev)
             self.target_actor.to(self.dev)
 
             self.critic.to(self.dev)
             self.target_critic.to(self.dev)
-            
-            
+
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), self.lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), self.lr)
-        
-        
+
         utils.hard_update(self.target_actor, self.actor)
         utils.hard_update(self.target_critic, self.critic)
 
@@ -83,9 +89,10 @@ class Trainer:
         state = torch.DoubleTensor(state).view(1, *shape)
         state = Variable(state).to(self.dev) if self.dev else Variable(state)
 
-        action = self.actor.forward(state).detach()
-        new_action = action.data.numpy() + (self.noise.sample() * self.action_lim)
-        return new_action
+        action = self.actor.forward(state).detach().cpu()
+        new_action = action.data.numpy() + self.noise.sample()  # oops
+        new_action = sigmoid(new_action) * self.action_lim.numpy()
+        return new_action[0]
 
     def optimize(self):
         """
@@ -94,10 +101,10 @@ class Trainer:
         """
         s1, a1, r1, s2 = self.ram.sample(self.bs)
 
-        s1 = Variable(torch.from_numpy(s1))
-        a1 = Variable(torch.from_numpy(a1))
-        r1 = Variable(torch.from_numpy(r1))
-        s2 = Variable(torch.from_numpy(s2))
+        s1 = Variable(torch.from_numpy(s1)).to(self.dev) if self.dev else Variable(torch.from_numpy(s1))
+        a1 = Variable(torch.from_numpy(a1)).to(self.dev) if self.dev else Variable(torch.from_numpy(s1))
+        r1 = Variable(torch.from_numpy(r1)).to(self.dev) if self.dev else Variable(torch.from_numpy(s1))
+        s2 = Variable(torch.from_numpy(s2)).to(self.dev) if self.dev else Variable(torch.from_numpy(s1))
 
         # ---------------------- optimize critic ----------------------
         # Use target actor exploitation policy here for loss evaluation
@@ -123,10 +130,41 @@ class Trainer:
         utils.soft_update(self.target_actor, self.actor, TAU)
         utils.soft_update(self.target_critic, self.critic, TAU)
 
-    # if self.iter % 100 == 0:
-    # 	print 'Iteration :- ', self.iter, ' Loss_actor :- ', loss_actor.data.numpy(),\
-    # 		' Loss_critic :- ', loss_critic.data.numpy()
-    # self.iter += 1
+    def episode(self, i):
+        observation, _ = self.env.reset()
+
+        for t in count():
+            start_time = time.time()
+
+            action = self.get_exploration_action(observation)
+
+            new_observation, reward, done, info = self.env.step(action)
+
+            new_observation[new_observation == 255] = 0
+
+            self.ram.add(observation, action, reward, new_observation)
+
+            observation = new_observation
+
+            # perform optimization
+            self.optimize()
+
+            print(f'[ATA episode {i}]: took [{time.time() - start_time:.1f}] seconds for one full step')
+
+            if done:
+                break
+
+        gc.collect()
+
+        # save env, buffer, agent
+        episode_dir = self.savedir / f'{i}_episode'
+        episode_dir.mkdir(exist_ok=True)
+
+        self.env.save(episode_dir)
+        self.ram.save(self.savedir / 'mem.pkl')
+        self.save(episode_dir)
+
+        return t
 
     def save(self, savedir):
         """
@@ -145,5 +183,6 @@ class Trainer:
         """
         self.actor.load_state_dict(torch.load(savedir / f"actor.pt"))
         self.critic.load_state_dict(torch.load(savedir / f"critic.pt"))
+
         utils.hard_update(self.target_actor, self.actor)
         utils.hard_update(self.target_critic, self.critic)
