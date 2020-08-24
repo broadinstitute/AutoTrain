@@ -147,6 +147,10 @@ class Trainer:
             
             
             if done:
+                
+                if info.result[-1] > self.env._baseline.result[-1]:
+                    self.env.set_baseline(info)
+                    
                 self.ram.add(observation, action, reward, np.zeros(self.env.observation_space.shape))
                 break
                 

@@ -168,7 +168,7 @@ class AutoTrainEnvironment(gym.Env):
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
-        self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([10., 10., 1., 1.]),
+        self.action_space = spaces.Box(low=np.array([0., 0., 0., 0.]), high=np.array([2., 2., 1., 1.]),
                                        dtype=np.float32)
         # 7 channels:  loss, lr, bs for competitor and baseline + one for results monitoring
 
@@ -375,13 +375,16 @@ class AutoTrainEnvironment(gym.Env):
 
         ic = self.time_step * self.U
         ib = min(ic, len(self._baseline.history[0]))
-
-        baseline = np.mean(self._baseline.history[0][ib - window:ib])
-        competitor = np.mean(self._competitor.history[0][ic - window:ic])
+        
+        bvals = self._baseline.history[0][ib - window:ib]
+        baseline = np.mean(bvals)
+        
+        cvals = self._competitor.history[0][ic - window:ic]
+        competitor = np.mean(cvals)
 
         delta = competitor - baseline
         r = max(min(scale * delta, r_max), r_min)
-
+        self.log(f'delta is: [{delta:.4f}]; scaled delta is [{scale*delta:.4f}]') # TODO unstable gradients when lr >>; changed lim to 2,2,1,1 
         return r
 
     def reset(self):
