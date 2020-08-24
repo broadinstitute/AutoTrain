@@ -35,7 +35,10 @@ class Trainer:
         self.bs = bs
         self.lr = lr
         self.dev = dev
-
+        
+        if self.dev:
+            self.action_lim = self.action_lim.to(self.dev)
+        
         self.actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
         self.target_actor = model.Actor(self.state_shape, self.action_dim, self.action_lim)
 
@@ -49,7 +52,6 @@ class Trainer:
             self.critic.to(self.dev)
             self.target_critic.to(self.dev)
             
-            self.action_lim.to(self.dev)
             
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), self.lr)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), self.lr)

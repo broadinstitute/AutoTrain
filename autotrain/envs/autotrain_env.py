@@ -56,7 +56,7 @@ class ClfEngine:
 
         self.trndl, _, self.valdl = utils.create_dls(self.trnds, self.valds, bs=self._curr_bs)
 
-        self._max_bs = len(trnds) / 10
+        self._max_bs = len(trnds) // 10
         self._max_lr = max_lr
 
         self.model = model.to(self.dev) if self.dev else model

@@ -130,7 +130,7 @@ class Actor(nn.Module):
         :return: Output action (Torch Variable: [n,action_dim] )
         """
         x = self.state_net(state)
-        action = F.tanh(self.fc(x))
+        action = F.tanh(F.relu(self.fc(x)))
         print(action, self.action_lim, action.is_cuda, self.action_lim.is_cuda)
         action = action * self.action_lim
 
