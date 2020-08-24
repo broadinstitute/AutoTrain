@@ -25,7 +25,6 @@ class ConvNet(nn.Module):  # needs to be
         # 7, 256, 256
         super(ConvNet, self).__init__()
         nc, width, height = input_shape
-        print(input_shape, nc, width, height)
         nw, nh = compute_conv_output(width, height, 3)
 
         self.fc_dim = 8 * nw * nh
@@ -43,7 +42,7 @@ class ConvNet(nn.Module):  # needs to be
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = self.pool(F.relu(self.conv3(x)))
-        print(x.shape)
+
         x = x.view(-1, self.fc_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
