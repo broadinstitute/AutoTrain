@@ -73,11 +73,12 @@ class Trainer:
         :return: sampled action (Numpy array)
         """
         shape = state.shape
-        state = torch.DoubleTensor(state).view(1, *shape)
+        state = torch.FloatTensor(state).view(1, *shape)
         state = Variable(state).to(self.dev) if self.dev else Variable(state)
 
-        action = self.target_actor.forward(state).detach()
-        return action.data.numpy()
+        action = self.target_actor.forward(state).detach().cpu()
+        action = sigmoid(action.numpy()) * self.action_lim
+        return action
 
     def get_exploration_action(self, state):
         """
@@ -86,12 +87,12 @@ class Trainer:
         :return: sampled action (Numpy array)
         """
         shape = state.shape
-        state = torch.DoubleTensor(state).view(1, *shape)
+        state = torch.FloatTensor(state).view(1, *shape)
         state = Variable(state).to(self.dev) if self.dev else Variable(state)
 
         action = self.actor.forward(state).detach().cpu()
         new_action = action.data.numpy() + self.noise.sample()  # oops
-        new_action = sigmoid(new_action) * self.action_lim.numpy()
+        new_action = sigmoid(new_action) * self.action_lim
         return new_action[0]
 
     def optimize(self):
@@ -99,6 +100,9 @@ class Trainer:
         Samples a random batch from replay memory and performs optimization
         :return:
         """
+        if self.ram.len < self.bs:
+            return 
+        
         s1, a1, r1, s2 = self.ram.sample(self.bs)
 
         s1 = Variable(torch.from_numpy(s1)).to(self.dev) if self.dev else Variable(torch.from_numpy(s1))
@@ -129,6 +133,7 @@ class Trainer:
 
         utils.soft_update(self.target_actor, self.actor, TAU)
         utils.soft_update(self.target_critic, self.critic, TAU)
+        print(f'[ATA] optimization step performed')
 
     def episode(self, i):
         observation, _ = self.env.reset()
@@ -139,10 +144,13 @@ class Trainer:
             action = self.get_exploration_action(observation)
 
             new_observation, reward, done, info = self.env.step(action)
+            
+            self.ram.add(observation, action, reward, new_observation)
+            
+            if done:
+                break
 
             new_observation[new_observation == 255] = 0
-
-            self.ram.add(observation, action, reward, new_observation)
 
             observation = new_observation
 
@@ -151,8 +159,7 @@ class Trainer:
 
             print(f'[ATA episode {i}]: took [{time.time() - start_time:.1f}] seconds for one full step')
 
-            if done:
-                break
+
 
         gc.collect()
 

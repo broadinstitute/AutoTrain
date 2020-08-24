@@ -170,7 +170,7 @@ class AutoTrainEnvironment(gym.Env):
 
     def init(self, baseline: Clf, competitor: ClfEngine, savedir: Path,
              U: int = 30, horizon: int = 50, step_reward: float = 0.1, terminal_reward: float = 10,
-             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(256, 256),
+             update_penalty: float = 0.1, test_interval: int = 10, o_dim=(256, 256), thresh=0.8,
              num_workers=4, v=False, device=None):
 
         self.reward_range = None
@@ -185,7 +185,9 @@ class AutoTrainEnvironment(gym.Env):
 
         self.U = U  # how many batch updates in one time step
         self.horizon = horizon  # time steps i.e. multiple of T
-
+        
+        self.thresh = thresh
+        
         self.step_reward = step_reward
         self.terminal_reward = terminal_reward
         self.update_penalty = update_penalty
@@ -263,8 +265,8 @@ class AutoTrainEnvironment(gym.Env):
         self.log(f'action [{action}] recieved')
         assert self.action_space.contains(action), 'invalid action provided'
 
-        is_stop = np.random.rand() < action[-1]  #  TODO: thresholding exp.
-        is_reinit = np.random.rand() < action[-2]
+        is_stop = action[-1] > self.thresh  #  TODO: thresholding exp.
+        is_reinit = action[-2] > self.thresh
 
         if is_stop or self.time_step + 1 >= self.horizon:
             final_reward = self._compute_final_reward()
